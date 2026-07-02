@@ -1,0 +1,15 @@
+.venv/
+.venv-wsl/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+node_modules/
+dist/
+backend/tmp/
+data/trajectories/*.json
+data/trajectories/*.jsonl
+*.log
+tmp_*.py
+%SystemDrive%/
