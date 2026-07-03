@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 
@@ -9,13 +9,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.api.routes_agent import router as agent_router
 from backend.api.routes_camera import router as camera_router
 from backend.api.routes_env import router as env_router
+from backend.api.routes_settings import router as settings_router
 
 load_dotenv()
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Embodied Visual Search V1", version="0.1.0")
-
     cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:5173")
     app.add_middleware(
         CORSMiddleware,
@@ -32,6 +32,7 @@ def create_app() -> FastAPI:
     app.include_router(env_router)
     app.include_router(agent_router)
     app.include_router(camera_router)
+    app.include_router(settings_router)
     return app
 
 

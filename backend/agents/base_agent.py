@@ -1,12 +1,15 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from backend.schemas.agent_schema import AgentDecision
-from backend.schemas.env_schema import ObservationResponse
+from backend.schemas.agent_schema import AgentStepResponse
 
 
 class BaseAgent(ABC):
     @abstractmethod
-    def decide(self, observation: ObservationResponse, task: str | None = None) -> AgentDecision:
+    def reset(self, task_instruction: str, target_object: str | None = None, max_steps: int = 30) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def step(self, execute: bool = True) -> AgentStepResponse:
         raise NotImplementedError

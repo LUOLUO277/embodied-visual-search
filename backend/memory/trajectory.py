@@ -1,9 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from backend.schemas.agent_schema import TrajectoryItem
+from backend.schemas.agent_schema import AgentActionResult, AgentThought, TrajectoryItem
+from backend.schemas.action_schema import HighLevelAction
 
 
 class TrajectoryStore:
@@ -19,13 +20,16 @@ class TrajectoryStore:
         self,
         scene: str,
         task: str,
-        thought: str,
-        action: str,
-        success: bool,
-        error_message: str,
-        visible_objects: list[str],
+        thought: AgentThought,
+        action: HighLevelAction,
+        action_result: AgentActionResult,
+        raw_model_output: str,
+        visible_objects: list[dict],
+        seen_object_ids: list[str],
+        holding_objects: list[str],
         agent_pose: dict,
         robot_view: str,
+        last_action_feedback: dict,
     ) -> TrajectoryItem:
         item = TrajectoryItem(
             step=len(self.items) + 1,
@@ -33,11 +37,14 @@ class TrajectoryStore:
             task=task,
             thought=thought,
             action=action,
-            success=success,
-            error_message=error_message,
+            action_result=action_result,
+            raw_model_output=raw_model_output,
             visible_objects=visible_objects,
+            seen_object_ids=seen_object_ids,
+            holding_objects=holding_objects,
             agent_pose=agent_pose,
             robot_view=robot_view,
+            last_action_feedback=last_action_feedback,
         )
         self.items.append(item)
         self._persist()

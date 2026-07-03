@@ -1,4 +1,4 @@
-import type { ScenePayload } from "../api/client";
+﻿import type { ScenePayload } from "../api/client";
 
 type Props = {
   scenes: ScenePayload | null;
@@ -16,10 +16,12 @@ export function ScenePanel(props: Props) {
   const sceneOptions = props.scenes?.scenes_by_room[props.roomType] ?? [];
 
   return (
-    <section className="panel">
-      <h2>Scene Selection</h2>
+    <section className="panel side-panel">
+      <div className="panel-title-row">
+        <h2>房间设定</h2>
+      </div>
       <label>
-        Room Type
+        房型
         <select value={props.roomType} onChange={(e) => props.onRoomTypeChange(e.target.value)}>
           {props.scenes?.room_types.map((room) => (
             <option key={room} value={room}>
@@ -30,7 +32,7 @@ export function ScenePanel(props: Props) {
       </label>
 
       <label>
-        Scene
+        场景
         <select value={props.scene} onChange={(e) => props.onSceneChange(e.target.value)}>
           {sceneOptions.map((item) => (
             <option key={item} value={item}>
@@ -41,16 +43,12 @@ export function ScenePanel(props: Props) {
       </label>
 
       <label>
-        Task
-        <input
-          value={props.task}
-          onChange={(e) => props.onTaskChange(e.target.value)}
-          placeholder="Find the sofa"
-        />
+        场景任务描述
+        <input value={props.task} onChange={(e) => props.onTaskChange(e.target.value)} placeholder="Find the sofa" />
       </label>
 
       <button onClick={props.onLoad} disabled={props.loading || !props.scene}>
-        {props.loading ? "Loading..." : "Load Scene"}
+        {props.loading ? "加载中..." : "载入场景"}
       </button>
     </section>
   );

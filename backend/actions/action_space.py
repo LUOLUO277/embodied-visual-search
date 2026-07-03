@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from enum import Enum
 
@@ -15,4 +15,17 @@ class ActionName(str, Enum):
     DONE = "Done"
 
 
-SUPPORTED_ACTIONS = [action.value for action in ActionName]
+HIGH_LEVEL_ACTIONS = [
+    "observe",
+    "move forward",
+    "navigate to",
+    "pickup",
+    "put in",
+    "toggle",
+    "open",
+    "close",
+    "end",
+]
+
+MANUAL_ACTIONS = [action.value for action in ActionName]
+SUPPORTED_ACTIONS = MANUAL_ACTIONS

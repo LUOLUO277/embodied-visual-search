@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any
 
@@ -26,6 +26,21 @@ class RoomCameraPose(BaseModel):
     pitch: float
 
 
+class VisibleObject(BaseModel):
+    objectId: str
+    objectType: str
+    name: str
+    visible: bool = True
+    distance: float | None = None
+    pickupable: bool = False
+    receptacle: bool = False
+    openable: bool = False
+    isOpen: bool | None = None
+    toggleable: bool = False
+    isToggled: bool | None = None
+    parentReceptacles: list[str] = Field(default_factory=list)
+
+
 class RoomObjectInfo(BaseModel):
     object_id: str
     object_type: str
@@ -38,9 +53,11 @@ class RoomObjectInfo(BaseModel):
 class EnvMetadata(BaseModel):
     scene_name: str
     agent_pose: AgentPose
-    visible_objects: list[str]
+    visible_objects: list[VisibleObject]
+    last_action: str = ""
     last_action_success: bool
     error_message: str = ""
+    inventory_objects: list[str] = Field(default_factory=list)
     task: str | None = None
     room_camera: RoomCameraPose | None = None
 

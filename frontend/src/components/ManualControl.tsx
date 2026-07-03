@@ -1,4 +1,4 @@
-const ACTIONS = [
+﻿const ACTIONS = [
   "MoveAhead",
   "MoveBack",
   "MoveLeft",
@@ -17,9 +17,11 @@ type Props = {
 
 export function ManualControl({ disabled, onAction }: Props) {
   return (
-    <section className="panel">
-      <h2>Manual Control</h2>
-      <div className="action-grid">
+    <section className="panel side-panel">
+      <div className="panel-title-row">
+        <h2>手动动作</h2>
+      </div>
+      <div className="action-grid compact-action-grid">
         {ACTIONS.map((action) => (
           <button key={action} disabled={disabled} onClick={() => onAction(action)}>
             {action}

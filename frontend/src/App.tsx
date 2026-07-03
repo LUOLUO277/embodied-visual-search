@@ -1,7 +1,16 @@
-import { useEffect, useState } from "react";
-import { api, type Observation, type RoomViewHit, type ScenePayload, type TrajectoryItem } from "./api/client";
+﻿import { useEffect, useState } from "react";
+import {
+  api,
+  type AgentState,
+  type AgentStepResponse,
+  type Observation,
+  type RoomViewHit,
+  type ScenePayload,
+  type TrajectoryItem,
+} from "./api/client";
 import { AgentPanel } from "./components/AgentPanel";
 import { ManualControl } from "./components/ManualControl";
+import { ModelSettingsPanel } from "./components/ModelSettingsPanel";
 import { RobotView } from "./components/RobotView";
 import { RoomView } from "./components/RoomView";
 import { ScenePanel } from "./components/ScenePanel";
@@ -22,9 +31,12 @@ function App() {
   const [roomType, setRoomType] = useState("Kitchen");
   const [scene, setScene] = useState("");
   const [task, setTask] = useState("Find the sofa");
+  const [taskInstruction, setTaskInstruction] = useState("寻找房间里纸箱子并拿起来");
+  const [maxSteps, setMaxSteps] = useState(30);
   const [observation, setObservation] = useState<Observation | null>(null);
   const [trajectory, setTrajectory] = useState<TrajectoryItem[]>([]);
-  const [thought, setThought] = useState("");
+  const [agentState, setAgentState] = useState<AgentState | null>(null);
+  const [latestStep, setLatestStep] = useState<AgentStepResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -41,6 +53,11 @@ function App() {
       setRoomType(defaultRoom);
       setScene(defaultScene);
       setTrajectory((await api.getTrajectory()).items);
+      try {
+        setAgentState(await api.getAgentState());
+      } catch {
+        setAgentState(null);
+      }
     } catch (err) {
       setError(String(err));
     }
@@ -52,8 +69,11 @@ function App() {
   }
 
   async function refreshTrajectory() {
-    const response = await api.getTrajectory();
-    setTrajectory(response.items);
+    setTrajectory((await api.getTrajectory()).items);
+  }
+
+  async function refreshAgentState() {
+    setAgentState(await api.getAgentState());
   }
 
   async function handleLoad() {
@@ -61,8 +81,9 @@ function App() {
       setLoading(true);
       const result = await api.loadScene(scene, task);
       syncObservation(result);
-      setThought("");
+      setLatestStep(null);
       await refreshTrajectory();
+      await refreshAgentState();
     } catch (err) {
       setError(String(err));
     } finally {
@@ -83,13 +104,27 @@ function App() {
     }
   }
 
-  async function handleAgentStep() {
+  async function handleAgentReset() {
+    const result = await api.resetAgent(taskInstruction, maxSteps);
+    setAgentState(result);
+    setLatestStep(null);
+    await refreshTrajectory();
+    return result;
+  }
+
+  async function handleAgentStart() {
     try {
       setLoading(true);
-      const result = await api.agentStep(task);
-      setThought(result.decision.thought);
-      syncObservation(result.observation);
+      await handleAgentReset();
+      const result = await api.runAgent(true);
+      const last = result[result.length - 1] ?? null;
+      setLatestStep(last);
+      if (last?.robot_view) {
+        const nextObservation = await api.getObservation();
+        syncObservation(nextObservation);
+      }
       await refreshTrajectory();
+      await refreshAgentState();
     } catch (err) {
       setError(String(err));
     } finally {
@@ -97,11 +132,47 @@ function App() {
     }
   }
 
+  async function handleAgentResetOnly() {
+    try {
+      setLoading(true);
+      await handleAgentReset();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAgentStep() {
+    try {
+      setLoading(true);
+      const result = await api.stepAgent(true);
+      setLatestStep(result);
+      if (result.robot_view) {
+        const nextObservation = await api.getObservation();
+        syncObservation(nextObservation);
+      }
+      setTrajectory(result.trajectory);
+      await refreshAgentState();
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAgentStop() {
+    try {
+      setAgentState(await api.stopAgent());
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   async function handleRoomOrbit(deltaYaw: number, deltaPitch: number) {
     if (!observation) {
       return;
     }
-
     try {
       const result = await api.orbitRoomView(deltaYaw, deltaPitch);
       syncObservation(result);
@@ -114,7 +185,6 @@ function App() {
     if (!observation?.room_view) {
       return EMPTY_ROOM_HIT;
     }
-
     try {
       return await api.inspectRoomView(x, y);
     } catch (err) {
@@ -130,21 +200,35 @@ function App() {
   }
 
   return (
-    <div className="app-shell">
-      <header className="hero">
-        <div>
-          <p className="eyebrow">AI2-THOR Online Interaction Prototype</p>
-          <h1>Embodied Visual Search Agent V1</h1>
+    <div className="app-shell dashboard-shell">
+      <header className="topbar">
+        <div className="brand-block">
+          <h1>具身视觉搜索</h1>
+          <p>AI2-THOR × Claude</p>
         </div>
-        <div className="status-card">
-          <p>Scene: {observation?.metadata.scene_name || scene || "-"}</p>
-          <p>Task: {task || "-"}</p>
-          <p>Last Success: {String(observation?.metadata.last_action_success ?? false)}</p>
+        <div className="topbar-actions">
+          <span className="top-chip">轨迹管理 {trajectory.length}</span>
+          <span className={`top-chip ${loading || agentState?.running ? "busy-chip" : "success-chip"}`}>{loading || agentState?.running ? "运行中" : "空闲"}</span>
         </div>
       </header>
 
-      <main className="layout">
-        <div className="sidebar">
+      <main className="dashboard-layout">
+        <section className="dashboard-main">
+          <RobotView
+            image={observation?.robot_view ?? null}
+            sceneName={observation?.metadata.scene_name || scene || "-"}
+            stepLabel={`第 ${agentState?.current_step ?? 0} 步`}
+          />
+          <RoomView
+            image={observation?.room_view ?? null}
+            camera={observation?.metadata.room_camera ?? null}
+            disabled={!observation || loading}
+            onInspect={handleRoomInspect}
+            onOrbit={handleRoomOrbit}
+          />
+        </section>
+
+        <aside className="dashboard-sidebar">
           <ScenePanel
             scenes={scenes}
             roomType={roomType}
@@ -156,39 +240,23 @@ function App() {
             onTaskChange={setTask}
             onLoad={handleLoad}
           />
+          <ModelSettingsPanel onStatus={setError} />
+          <AgentPanel
+            taskInstruction={taskInstruction}
+            maxSteps={maxSteps}
+            disabled={loading || !observation}
+            agentState={agentState}
+            latestStep={latestStep}
+            onTaskInstructionChange={setTaskInstruction}
+            onMaxStepsChange={setMaxSteps}
+            onStart={handleAgentStart}
+            onReset={handleAgentResetOnly}
+            onStep={handleAgentStep}
+            onStop={handleAgentStop}
+          />
           <ManualControl disabled={loading || !observation} onAction={handleAction} />
-          <AgentPanel task={task} thought={thought} disabled={loading || !observation} onStep={handleAgentStep} />
-        </div>
-
-        <div className="content">
-          <section className="view-grid">
-            <RobotView image={observation?.robot_view ?? null} />
-            <RoomView
-              image={observation?.room_view ?? null}
-              camera={observation?.metadata.room_camera ?? null}
-              disabled={!observation || loading}
-              onInspect={handleRoomInspect}
-              onOrbit={handleRoomOrbit}
-            />
-          </section>
-
-          <section className="panel metadata-panel">
-            <h2>Metadata</h2>
-            {observation ? (
-              <>
-                <p>Scene: {observation.metadata.scene_name}</p>
-                <p>Pose: {JSON.stringify(observation.metadata.agent_pose)}</p>
-                <p>Visible Objects: {observation.metadata.visible_objects.join(", ") || "-"}</p>
-                <p>Room Camera: {observation.metadata.room_camera ? JSON.stringify(observation.metadata.room_camera.rotation) : "-"}</p>
-                <p>Error: {observation.metadata.error_message || "-"}</p>
-              </>
-            ) : (
-              <div className="empty">Load a scene first</div>
-            )}
-          </section>
-
           <TrajectoryPanel items={trajectory} />
-        </div>
+        </aside>
       </main>
 
       {error ? <div className="error-banner">{error}</div> : null}

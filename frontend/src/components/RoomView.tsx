@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+﻿import { useEffect, useRef, useState, type PointerEvent } from "react";
 import type { Observation, RoomViewHit } from "../api/client";
 
 type Props = {
@@ -163,10 +163,10 @@ export function RoomView({ image, camera, disabled, onInspect, onOrbit }: Props)
     : "room-view-tooltip";
 
   return (
-    <section className="panel viewer room-viewer">
-      <div className="viewer-header">
-        <h2>Room View</h2>
-        <p className="muted room-view-hint">Hover to inspect. Drag to orbit.</p>
+    <section className="panel viewer room-viewer observer-panel">
+      <div className="viewer-toolbar">
+        <span className="viewer-title">观察视角</span>
+        <span className="viewer-helper">左拖旋转 · 悬停检查</span>
       </div>
       {image ? (
         <div
@@ -177,7 +177,7 @@ export function RoomView({ image, camera, disabled, onInspect, onOrbit }: Props)
           onPointerUp={handlePointerUp}
           onPointerLeave={handlePointerLeave}
         >
-          <img src={image} alt="Interactive room view" draggable={false} />
+          <img src={`data:image/png;base64,${image}`} alt="Interactive room view" draggable={false} />
           {hover ? <div className="room-view-halo" style={haloStyle} /> : null}
           {hit?.hit && hit.object ? (
             <div className={tooltipClassName} style={haloStyle}>
@@ -197,7 +197,7 @@ export function RoomView({ image, camera, disabled, onInspect, onOrbit }: Props)
       ) : (
         <div className="empty">No image</div>
       )}
-      <div className="room-view-footer muted">
+      <div className="room-view-footer muted observer-footer">
         {camera
           ? `Yaw ${camera.yaw.toFixed(1)} deg | Pitch ${camera.pitch.toFixed(1)} deg | FOV ${camera.field_of_view.toFixed(0)} deg`
           : "Load a scene to activate room view."}
@@ -205,4 +205,3 @@ export function RoomView({ image, camera, disabled, onInspect, onOrbit }: Props)
     </section>
   );
 }
-
