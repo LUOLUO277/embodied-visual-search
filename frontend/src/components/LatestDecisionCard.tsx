@@ -5,8 +5,10 @@ import {
   getConfidenceLabel,
   getFeedbackLabel,
   getMemoryUpdate,
+  getSearchMemory,
   getStepStatus,
   getStepSummary,
+  getThoughtPhase,
   getThoughtSections,
 } from "../utils/agentPresentation";
 
@@ -28,11 +30,25 @@ function renderField(label: string, value: string | null | undefined) {
   );
 }
 
+function renderMemoryList(label: string, values: string[]) {
+  if (values.length === 0) {
+    return null;
+  }
+  return (
+    <div className="decision-field">
+      <span className="decision-field-label">{label}</span>
+      <p>{values.join("; ")}</p>
+    </div>
+  );
+}
+
 export function LatestDecisionCard({ latestStep, agentState, onOpenTrajectory }: Props) {
   const status = getStepStatus(latestStep, agentState);
   const memory = getMemoryUpdate(latestStep);
+  const searchMemory = getSearchMemory(latestStep, agentState);
   const confidence = getConfidenceLabel(latestStep?.action);
   const thoughtSections = getThoughtSections(latestStep?.thought).filter((item) => item.value);
+  const phase = getThoughtPhase(latestStep?.thought);
   const currentStep = latestStep?.step ?? agentState?.current_step ?? 0;
   const maxSteps = agentState?.max_steps ?? 20;
 
@@ -49,6 +65,7 @@ export function LatestDecisionCard({ latestStep, agentState, onOpenTrajectory }:
         <span className={`status-badge tone-${status.tone}`}>{status.label}</span>
         <span className="neutral-badge">Step {currentStep} / {maxSteps}</span>
         <span className="neutral-badge">{getActionLabel(latestStep?.action, latestStep?.action_result.action_name)}</span>
+        <span className="phase-badge">{phase}</span>
         {confidence ? <span className="neutral-badge">置信度 {confidence}</span> : null}
       </div>
 
@@ -68,29 +85,54 @@ export function LatestDecisionCard({ latestStep, agentState, onOpenTrajectory }:
           </div>
         </div>
         <div className="decision-block">
-          <span className="section-kicker">关键线索</span>
-          {renderField("正向线索", memory.positive_clue)}
-          {renderField("负向发现", memory.negative_finding)}
-          {renderField("当前假设", memory.current_hypothesis)}
-          {!memory.positive_clue && !memory.negative_finding && !memory.current_hypothesis ? <p className="muted">暂无关键线索。</p> : null}
+          <span className="section-kicker">Thought</span>
+          {thoughtSections.length > 0 ? (
+            <div className="detail-stack detail-stack-tight no-pad-stack">
+              {thoughtSections.map((section) => (
+                <div key={section.key} className="decision-field">
+                  <span className="decision-field-label">{section.label}</span>
+                  <p>{section.value}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="muted">暂无 thought 内容。</p>
+          )}
         </div>
       </div>
 
-      <div className="decision-feedback muted">反馈：{getFeedbackLabel(latestStep)}</div>
+      <details className="detail-accordion" open>
+        <summary>记忆更新</summary>
+        <div className="memory-stack">
+          {renderField("Checked", memory.checked)}
+          {renderField("Ruled Out", memory.ruled_out)}
+          {renderField("Clue", memory.clue)}
+          {renderField("Avoid", memory.avoid)}
+          {!memory.checked && !memory.ruled_out && !memory.clue && !memory.avoid ? <p className="muted">暂无记忆更新。</p> : null}
+        </div>
+      </details>
 
-      {thoughtSections.length > 0 ? (
-        <details className="detail-accordion">
-          <summary>展开详细思考</summary>
-          <div className="detail-stack">
-            {thoughtSections.map((section) => (
-              <div key={section.key} className="detail-card">
-                <h3>{section.label}</h3>
-                <p>{section.value}</p>
+      <details className="detail-accordion">
+        <summary>Search Memory</summary>
+        <div className="memory-stack">
+          {searchMemory ? (
+            <>
+              <div className="decision-field">
+                <span className="decision-field-label">Summary</span>
+                <p>{searchMemory.summary}</p>
               </div>
-            ))}
-          </div>
-        </details>
-      ) : null}
+              {renderMemoryList("Checked", searchMemory.checked)}
+              {renderMemoryList("Ruled Out", searchMemory.ruled_out)}
+              {renderMemoryList("Avoid", searchMemory.avoid)}
+              {renderMemoryList("Recent Clues", searchMemory.recent_clues)}
+            </>
+          ) : (
+            <p className="muted">暂无 search memory。</p>
+          )}
+        </div>
+      </details>
+
+      <div className="decision-feedback muted">反馈：{getFeedbackLabel(latestStep)}</div>
     </section>
   );
 }

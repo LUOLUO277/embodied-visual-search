@@ -91,15 +91,24 @@ class HighLevelAction(BaseModel):
             return data
         normalized_data = dict(data)
         name = normalized_data.get("name")
+        raw_repetition_requested = False
         if isinstance(name, str):
             stripped_name = name.strip()
             repeated_match = REPEATED_ACTION_PATTERN.match(stripped_name)
             if repeated_match:
+                raw_repetition_requested = True
                 stripped_name = repeated_match.group("name").strip()
-                normalized_data["repetitions"] = int(repeated_match.group("count"))
+                count = int(repeated_match.group("count"))
+                normalized_data["repetitions"] = min(max(count, 1), 5)
             alias_key = stripped_name.lower().replace("-", "_").replace(" ", "_")
             normalized = ACTION_NAME_ALIASES.get(alias_key, stripped_name.lower())
             normalized_data["name"] = normalized
-            if normalized_data.get("repetitions", 1) > 1 and normalized not in REPEATABLE_ACTIONS:
-                normalized_data["repetitions"] = 1
+            if raw_repetition_requested and normalized not in REPEATABLE_ACTIONS:
+                raise ValueError(f"Action '{normalized}' does not support repetitions.")
+        repetitions = normalized_data.get("repetitions", 1)
+        try:
+            repetitions = int(repetitions)
+        except (TypeError, ValueError):
+            repetitions = 1
+        normalized_data["repetitions"] = min(max(repetitions, 1), 5)
         return normalized_data

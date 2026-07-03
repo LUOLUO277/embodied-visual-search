@@ -12,6 +12,7 @@ from backend.schemas.agent_schema import (
     AgentStateResponse,
     AgentStepRequest,
     AgentStepResponse,
+    SearchMemorySnapshot,
 )
 
 router = APIRouter(prefix="/api", tags=["agent"])
@@ -76,6 +77,13 @@ def get_agent_state() -> AgentStateResponse:
         current_step=search_state.current_step,
         last_error=search_state.last_error,
         last_step=search_state.last_step,
+        search_memory=SearchMemorySnapshot(
+            summary=search_state.semantic_memory.summary,
+            checked=list(search_state.semantic_memory.checked),
+            ruled_out=list(search_state.semantic_memory.ruled_out),
+            avoid=list(search_state.semantic_memory.avoid),
+            recent_clues=list(search_state.semantic_memory.recent_clues),
+        ),
     )
 
 

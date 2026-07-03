@@ -1,18 +1,66 @@
 ﻿from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.schemas.action_schema import HighLevelAction
 
+THOUGHT_PHASES = (
+    "initial_scan",
+    "visual_search",
+    "navigation",
+    "interaction",
+    "recovery",
+    "completion_check",
+)
+
 
 class AgentThought(BaseModel):
+    phase: Literal["initial_scan", "visual_search", "navigation", "interaction", "recovery", "completion_check"] = "visual_search"
     situation_analysis: str = ""
-    spatial_reasoning: str = ""
-    task_planning: str = ""
-    self_reflection: str = ""
-    verification: str = ""
+    spatial_reasoning: str | None = None
+    memory_reasoning: str | None = None
+    verification: str | None = None
+    decision: str = ""
+
+    @field_validator("situation_analysis", "decision", mode="before")
+    @classmethod
+    def normalize_required_text(cls, value: Any) -> str:
+        if not isinstance(value, str):
+            return ""
+        return value.strip()
+
+    @field_validator("spatial_reasoning", "memory_reasoning", "verification", mode="before")
+    @classmethod
+    def normalize_optional_text(cls, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class MemoryUpdate(BaseModel):
+    checked: str | None = None
+    ruled_out: str | None = None
+    clue: str | None = None
+    avoid: str | None = None
+
+    @field_validator("checked", "ruled_out", "clue", "avoid", mode="before")
+    @classmethod
+    def normalize_text(cls, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class SearchMemorySnapshot(BaseModel):
+    summary: str = "Search has not started yet."
+    checked: list[str] = Field(default_factory=list)
+    ruled_out: list[str] = Field(default_factory=list)
+    avoid: list[str] = Field(default_factory=list)
+    recent_clues: list[str] = Field(default_factory=list)
 
 
 class AgentResetRequest(BaseModel):
@@ -57,6 +105,8 @@ class TrajectoryItem(BaseModel):
     action: HighLevelAction
     action_result: AgentActionResult
     raw_model_output: str = ""
+    memory_update: MemoryUpdate | None = None
+    search_memory: SearchMemorySnapshot | None = None
     visible_objects: list[dict[str, Any]] = Field(default_factory=list)
     seen_object_ids: list[str] = Field(default_factory=list)
     holding_objects: list[str] = Field(default_factory=list)
@@ -70,6 +120,8 @@ class AgentStepResponse(BaseModel):
     thought: AgentThought
     action: HighLevelAction
     raw_model_output: str
+    memory_update: MemoryUpdate | None = None
+    search_memory: SearchMemorySnapshot | None = None
     action_result: AgentActionResult
     robot_view: str | None = None
     trajectory: list[TrajectoryItem] = Field(default_factory=list)
@@ -87,3 +139,4 @@ class AgentStateResponse(BaseModel):
     current_step: int = 0
     last_error: str = ""
     last_step: AgentStepResponse | None = None
+    search_memory: SearchMemorySnapshot | None = None

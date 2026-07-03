@@ -12,7 +12,7 @@ from backend.llm.output_parser import OutputParser, OutputParserError, build_par
 from backend.llm.prompt_builder import build_prompt
 from backend.memory.search_state import SearchState
 from backend.memory.trajectory import TrajectoryStore
-from backend.schemas.agent_schema import AgentActionResult, AgentStepResponse, AgentThought
+from backend.schemas.agent_schema import AgentActionResult, AgentStepResponse, AgentThought, MemoryUpdate, SearchMemorySnapshot
 from backend.schemas.action_schema import HighLevelAction
 
 
@@ -40,16 +40,7 @@ class LLMEmbodiedAgent(BaseAgent):
             "visible_interactable_objects": visible_objects,
             "holding_objects": self._sanitize_holding_objects(observation.metadata.inventory_objects),
             "last_action_feedback": self._build_last_action_feedback(observation),
-            "memory": {
-                "semantic": self.search_state.semantic_memory.summary,
-                "structured": {
-                    "searched_areas": list(self.search_state.semantic_memory.searched_areas),
-                    "negative_findings": list(self.search_state.semantic_memory.negative_findings),
-                    "positive_clues": list(self.search_state.semantic_memory.positive_clues),
-                    "current_hypothesis": self.search_state.semantic_memory.current_hypothesis,
-                    "failed_actions": list(self.search_state.semantic_memory.failed_actions),
-                },
-            },
+            "memory": self._prompt_memory_payload(),
         }
         system_prompt, user_prompt = build_prompt(
             task_instruction=self.search_state.task_instruction,
@@ -72,17 +63,18 @@ class LLMEmbodiedAgent(BaseAgent):
             result = build_parse_error_result(str(exc))
             return self._finalize_step(
                 thought=AgentThought(
-                    situation_analysis="Model output parsing failed repeatedly.",
-                    spatial_reasoning="",
-                    task_planning=f"Retry limit reached after {self.MAX_PARSE_RETRIES} invalid model outputs.",
-                    self_reflection="The model did not return a valid JSON object with thought and action fields.",
-                    verification=str(exc),
+                    phase="recovery",
+                    situation_analysis="The model output could not be parsed into a valid agent step.",
+                    spatial_reasoning=None,
+                    memory_reasoning=f"Parsing failed after {self.MAX_PARSE_RETRIES} attempts: {exc}",
+                    verification=None,
+                    decision="Observe again with a valid JSON response format.",
                 ),
                 action=HighLevelAction(name="observe", argument=None, confidence=0.0),
                 raw_model_output=getattr(exc, "raw_output", ""),
                 action_result=result,
                 observation=observation,
-                memory_update={},
+                memory_update=MemoryUpdate(),
             )
 
         if not execute:
@@ -148,7 +140,8 @@ class LLMEmbodiedAgent(BaseAgent):
         return (
             f"{base_user_prompt}\n\n"
             f"Previous output attempt {attempt} could not be parsed: {error_message}\n"
-            "Your previous response was invalid for the executor. Return exactly one valid JSON object with top-level fields thought, memory_update, and action. "
+            "Your previous response was invalid for the executor. Return exactly one valid JSON object: "
+            '{"thought":{"phase":"visual_search","situation_analysis":"...","spatial_reasoning":null,"memory_reasoning":null,"verification":null,"decision":"..."},"memory_update":{"checked":null,"ruled_out":null,"clue":null,"avoid":null},"action":{"name":"observe","argument":null,"confidence":0.0}}. '
             "Do not output markdown fences, explanations, or partial JSON. If a field value is unknown, use null.\n"
             f"Previous invalid output:\n{raw_snippet}"
         )
@@ -160,7 +153,7 @@ class LLMEmbodiedAgent(BaseAgent):
         raw_model_output: str,
         action_result: AgentActionResult,
         observation,
-        memory_update: dict[str, Any],
+        memory_update: MemoryUpdate,
     ) -> AgentStepResponse:
         self.search_state.current_step += 1
         self.search_state.agent_done = action_result.done
@@ -171,6 +164,7 @@ class LLMEmbodiedAgent(BaseAgent):
             self.search_state.visited_targets = self.search_state.visited_targets[-20:]
         self._update_semantic_memory(memory_update, action, action_result)
         self._update_seen_objects(observation.metadata.visible_objects)
+        search_memory = self._build_search_memory_snapshot()
         self.trajectory_store.record(
             scene=observation.metadata.scene_name,
             task=self.search_state.task_instruction,
@@ -178,6 +172,8 @@ class LLMEmbodiedAgent(BaseAgent):
             action=action,
             action_result=action_result,
             raw_model_output=raw_model_output,
+            memory_update=memory_update,
+            search_memory=search_memory,
             visible_objects=[item.model_dump() for item in observation.metadata.visible_objects],
             seen_object_ids=sorted(self.search_state.seen_object_ids),
             holding_objects=observation.metadata.inventory_objects,
@@ -194,6 +190,8 @@ class LLMEmbodiedAgent(BaseAgent):
             thought=thought,
             action=action,
             raw_model_output=raw_model_output,
+            memory_update=memory_update,
+            search_memory=search_memory,
             action_result=action_result,
             robot_view=observation.robot_view,
             trajectory=list(self.trajectory_store.items),
@@ -241,15 +239,9 @@ class LLMEmbodiedAgent(BaseAgent):
     def _build_last_action_feedback(self, observation) -> dict[str, Any]:
         if self.trajectory_store.items:
             last_result = self.trajectory_store.items[-1].action_result
-            return {
-                "success": last_result.success,
-                "message": last_result.message,
-            }
+            return {"success": last_result.success, "message": last_result.message}
         message = observation.metadata.error_message or "No previous action has been executed."
-        return {
-            "success": bool(observation.metadata.last_action_success),
-            "message": message,
-        }
+        return {"success": bool(observation.metadata.last_action_success), "message": message}
 
     def _sanitize_holding_objects(self, inventory_objects: list[str]) -> list[str]:
         cleaned: list[str] = []
@@ -259,47 +251,70 @@ class LLMEmbodiedAgent(BaseAgent):
             cleaned.append(str(item).split("|")[0])
         return cleaned
 
-    def _update_semantic_memory(self, memory_update: dict[str, Any], action: HighLevelAction, action_result: AgentActionResult) -> None:
+    def _prompt_memory_payload(self) -> dict[str, Any]:
         semantic_memory = self.search_state.semantic_memory
-        observed_area = self._clean_memory_text(memory_update.get("observed_area"))
-        searched_area = self._clean_memory_text(memory_update.get("searched_area"))
-        negative_finding = self._clean_memory_text(memory_update.get("negative_finding"))
-        positive_clue = self._clean_memory_text(memory_update.get("positive_clue"))
-        current_hypothesis = self._clean_memory_text(memory_update.get("current_hypothesis"))
-        summary = self._clean_memory_text(memory_update.get("summary"))
+        return {
+            "summary": semantic_memory.summary,
+            "checked": list(semantic_memory.checked[-8:]),
+            "ruled_out": list(semantic_memory.ruled_out[-8:]),
+            "avoid": list(semantic_memory.avoid[-8:]),
+            "recent_clues": list(semantic_memory.recent_clues[-5:]),
+        }
 
-        if searched_area:
-            self._append_unique(semantic_memory.searched_areas, searched_area, limit=20)
-        if negative_finding:
-            self._append_unique(semantic_memory.negative_findings, negative_finding, limit=20)
-        if positive_clue:
-            self._append_unique(semantic_memory.positive_clues, positive_clue, limit=20)
-        if current_hypothesis:
-            semantic_memory.current_hypothesis = current_hypothesis
+    def _build_search_memory_snapshot(self) -> SearchMemorySnapshot:
+        semantic_memory = self.search_state.semantic_memory
+        return SearchMemorySnapshot(
+            summary=semantic_memory.summary,
+            checked=list(semantic_memory.checked),
+            ruled_out=list(semantic_memory.ruled_out),
+            avoid=list(semantic_memory.avoid),
+            recent_clues=list(semantic_memory.recent_clues),
+        )
+
+    def _update_semantic_memory(self, memory_update: MemoryUpdate, action: HighLevelAction, action_result: AgentActionResult) -> None:
+        semantic_memory = self.search_state.semantic_memory
+        checked = self._clean_memory_text(memory_update.checked)
+        ruled_out = self._clean_memory_text(memory_update.ruled_out)
+        clue = self._clean_memory_text(memory_update.clue)
+        avoid = self._clean_memory_text(memory_update.avoid)
+
+        if checked:
+            self._append_unique(semantic_memory.checked, checked, limit=10)
+        if ruled_out:
+            self._append_unique(semantic_memory.ruled_out, ruled_out, limit=10)
+            self._append_unique(semantic_memory.avoid, ruled_out, limit=10)
+        if clue:
+            self._append_unique(semantic_memory.recent_clues, clue, limit=5)
+        if avoid:
+            self._append_unique(semantic_memory.avoid, avoid, limit=10)
         if not action_result.success:
-            semantic_memory.failed_actions.append(
-                {
-                    "action": action.name,
-                    "argument": str(action.argument),
-                    "message": action_result.message,
-                }
-            )
-            semantic_memory.failed_actions = semantic_memory.failed_actions[-5:]
+            failure_note = self._build_failure_avoid_note(action, action_result)
+            self._append_unique(semantic_memory.avoid, failure_note, limit=10)
 
-        if summary:
-            semantic_memory.summary = summary
-            return
+        semantic_memory.summary = self._compact_memory_summary(
+            checked=list(semantic_memory.checked[-2:]),
+            ruled_out=list(semantic_memory.ruled_out[-2:]),
+            recent_clues=list(semantic_memory.recent_clues[-2:]),
+        )
 
-        summary_parts = [
-            f"Observed area: {observed_area}." if observed_area else "",
-            f"Searched area: {searched_area}." if searched_area else "",
-            f"Negative finding: {negative_finding}." if negative_finding else "",
-            f"Positive clue: {positive_clue}." if positive_clue else "",
-            f"Current hypothesis: {semantic_memory.current_hypothesis}." if semantic_memory.current_hypothesis else "",
-        ]
-        generated_summary = " ".join(part for part in summary_parts if part).strip()
-        if generated_summary:
-            semantic_memory.summary = generated_summary
+    def _build_failure_avoid_note(self, action: HighLevelAction, action_result: AgentActionResult) -> str:
+        detail = self._clean_memory_text(action_result.message) or "failed feedback"
+        if action.argument:
+            return f"Avoid repeating {action.name} {action.argument} after failed feedback: {detail}"
+        return f"Avoid repeating {action.name} from the current pose after failed feedback: {detail}"
+
+    def _compact_memory_summary(self, checked: list[str], ruled_out: list[str], recent_clues: list[str]) -> str:
+        parts: list[str] = []
+        if checked:
+            parts.append(f"Checked {', '.join(checked)}.")
+        if ruled_out:
+            parts.append(f"Ruled out {', '.join(ruled_out)}.")
+        if recent_clues:
+            parts.append(f"Current clue: {'; '.join(recent_clues)}.")
+        summary = " ".join(parts).strip()
+        if len(summary) > 300:
+            summary = summary[:300].rstrip()
+        return summary or "Search has not started yet."
 
     def _update_seen_objects(self, visible_objects) -> None:
         for item in visible_objects:
@@ -335,8 +350,4 @@ class LLMEmbodiedAgent(BaseAgent):
             numeric_distance = float(distance)
         except (TypeError, ValueError):
             numeric_distance = 999.0
-        return (
-            str(item.get("objectType") or "Object"),
-            numeric_distance,
-            str(item.get("objectId") or ""),
-        )
+        return (str(item.get("objectType") or "Object"), numeric_distance, str(item.get("objectId") or ""))

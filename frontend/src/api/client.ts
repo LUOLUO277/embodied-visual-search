@@ -67,11 +67,37 @@ export type Observation = {
 };
 
 export type AgentThought = {
+  phase?: string;
   situation_analysis?: string;
-  spatial_reasoning?: string;
+  spatial_reasoning?: string | null;
+  memory_reasoning?: string | null;
+  verification?: string | null;
+  decision?: string;
+  modes?: string[];
+  brief?: string;
   task_planning?: string;
   self_reflection?: string;
-  verification?: string;
+};
+
+export type MemoryUpdate = {
+  checked?: string | null;
+  ruled_out?: string | null;
+  clue?: string | null;
+  avoid?: string | null;
+  observed_area?: string | null;
+  searched_area?: string | null;
+  negative_finding?: string | null;
+  positive_clue?: string | null;
+  current_hypothesis?: string | null;
+  summary?: string | null;
+};
+
+export type SearchMemorySnapshot = {
+  summary: string;
+  checked: string[];
+  ruled_out: string[];
+  avoid: string[];
+  recent_clues: string[];
 };
 
 export type HighLevelAction = {
@@ -135,6 +161,8 @@ export type TrajectoryItem = {
   action?: HighLevelAction;
   action_result: AgentActionResult;
   raw_model_output: string;
+  memory_update?: MemoryUpdate | null;
+  search_memory?: SearchMemorySnapshot | null;
   visible_objects: VisibleObject[];
   seen_object_ids: string[];
   holding_objects: string[];
@@ -148,6 +176,8 @@ export type AgentStepResponse = {
   thought?: AgentThought;
   action?: HighLevelAction;
   raw_model_output: string;
+  memory_update?: MemoryUpdate | null;
+  search_memory?: SearchMemorySnapshot | null;
   action_result: AgentActionResult;
   robot_view: string | null;
   trajectory: TrajectoryItem[];
@@ -165,6 +195,7 @@ export type AgentState = {
   current_step: number;
   last_error: string;
   last_step?: AgentStepResponse | null;
+  search_memory?: SearchMemorySnapshot | null;
 };
 
 export type ModelSettings = {

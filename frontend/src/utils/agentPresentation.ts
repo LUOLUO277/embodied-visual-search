@@ -1,15 +1,20 @@
-﻿import type { AgentState, AgentStepResponse, AgentThought, HighLevelAction, TrajectoryItem } from "../api/client";
-
-type MemoryUpdate = {
-  observed_area?: string | null;
-  searched_area?: string | null;
-  negative_finding?: string | null;
-  positive_clue?: string | null;
-  current_hypothesis?: string | null;
-  summary?: string | null;
-};
+﻿import type {
+  AgentState,
+  AgentStepResponse,
+  AgentThought,
+  HighLevelAction,
+  MemoryUpdate,
+  SearchMemorySnapshot,
+  TrajectoryItem,
+} from "../api/client";
 
 type StepLike = AgentStepResponse | TrajectoryItem;
+
+type ThoughtSection = {
+  key: string;
+  label: string;
+  value: string | null;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -21,6 +26,13 @@ function asText(value: unknown): string | null {
   }
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 }
 
 function parseRawJson(step: StepLike): Record<string, unknown> | null {
@@ -50,26 +62,68 @@ export function getMemoryUpdate(step: StepLike | null | undefined): MemoryUpdate
   if (!step) {
     return {};
   }
+  const direct = isRecord(step.memory_update) ? step.memory_update : null;
   const rawJson = parseRawJson(step);
-  const memoryUpdate = isRecord(rawJson?.memory_update) ? rawJson.memory_update : {};
+  const rawMemoryUpdate = isRecord(rawJson?.memory_update) ? rawJson.memory_update : {};
   return {
-    observed_area: asText(memoryUpdate.observed_area),
-    searched_area: asText(memoryUpdate.searched_area),
-    negative_finding: asText(memoryUpdate.negative_finding),
-    positive_clue: asText(memoryUpdate.positive_clue),
-    current_hypothesis: asText(memoryUpdate.current_hypothesis),
-    summary: asText(memoryUpdate.summary),
+    checked: asText(direct?.checked) ?? asText(rawMemoryUpdate.checked) ?? asText(rawMemoryUpdate.searched_area) ?? asText(rawMemoryUpdate.observed_area) ?? asText(rawMemoryUpdate.negative_finding),
+    ruled_out: asText(direct?.ruled_out) ?? asText(rawMemoryUpdate.ruled_out) ?? asText(rawMemoryUpdate.negative_finding),
+    clue: asText(direct?.clue) ?? asText(rawMemoryUpdate.clue) ?? asText(rawMemoryUpdate.positive_clue) ?? asText(rawMemoryUpdate.current_hypothesis),
+    avoid: asText(direct?.avoid) ?? asText(rawMemoryUpdate.avoid) ?? asText(rawMemoryUpdate.negative_finding),
   };
 }
 
-export function getThoughtSections(thought: AgentThought | null | undefined): Array<{ key: keyof AgentThought; label: string; value: string | null }> {
+export function getThoughtPhase(thought: AgentThought | null | undefined): string {
+  const phase = asText(thought?.phase);
+  if (phase) {
+    return phase;
+  }
+  const modes = Array.isArray(thought?.modes) ? thought.modes : [];
+  if (modes.includes("self_reflection")) {
+    return "recovery";
+  }
+  return "visual_search";
+}
+
+export function getThoughtSituation(thought: AgentThought | null | undefined): string {
+  return (
+    asText(thought?.situation_analysis)
+    ?? asText(thought?.brief)
+    ?? asText(thought?.situation_analysis)
+    ?? ""
+  );
+}
+
+export function getThoughtDecision(thought: AgentThought | null | undefined): string {
+  return asText(thought?.decision) ?? asText(thought?.brief) ?? asText(thought?.task_planning) ?? "";
+}
+
+export function getThoughtVerification(thought: AgentThought | null | undefined): string | null {
+  return asText(thought?.verification);
+}
+
+export function getThoughtSections(thought: AgentThought | null | undefined): ThoughtSection[] {
   return [
-    { key: "situation_analysis", label: "Situation", value: asText(thought?.situation_analysis) },
-    { key: "spatial_reasoning", label: "Spatial", value: asText(thought?.spatial_reasoning) },
-    { key: "task_planning", label: "Plan", value: asText(thought?.task_planning) },
-    { key: "self_reflection", label: "Reflection", value: asText(thought?.self_reflection) },
-    { key: "verification", label: "Verification", value: asText(thought?.verification) },
+    { key: "situation_analysis", label: "Situation Analysis", value: getThoughtSituation(thought) || null },
+    { key: "spatial_reasoning", label: "Spatial Reasoning", value: asText(thought?.spatial_reasoning) },
+    { key: "memory_reasoning", label: "Memory Reasoning", value: asText(thought?.memory_reasoning) ?? (getThoughtPhase(thought) === "recovery" ? asText(thought?.self_reflection) : null) },
+    { key: "verification", label: "Verification", value: getThoughtVerification(thought) },
+    { key: "decision", label: "Decision", value: getThoughtDecision(thought) || null },
   ];
+}
+
+export function getSearchMemory(step: StepLike | null | undefined, agentState?: AgentState | null): SearchMemorySnapshot | null {
+  const candidate = step?.search_memory ?? agentState?.search_memory;
+  if (!candidate) {
+    return null;
+  }
+  return {
+    summary: asText(candidate.summary) ?? "Search has not started yet.",
+    checked: asStringArray(candidate.checked),
+    ruled_out: asStringArray(candidate.ruled_out),
+    avoid: asStringArray(candidate.avoid),
+    recent_clues: asStringArray(candidate.recent_clues),
+  };
 }
 
 export function getActionName(action: HighLevelAction | null | undefined): string {
@@ -126,14 +180,19 @@ export function getStepSummary(step: StepLike | null | undefined): string {
     return "模型尚未开始决策。";
   }
 
-  const memory = getMemoryUpdate(step);
-  if (memory.summary) {
-    return memory.summary;
+  const decision = getThoughtDecision(step.thought);
+  if (decision) {
+    return decision;
   }
 
-  const situation = asText(step.thought?.situation_analysis);
+  const situation = getThoughtSituation(step.thought);
   if (situation) {
     return situation;
+  }
+
+  const memory = getMemoryUpdate(step);
+  if (memory.clue) {
+    return memory.clue;
   }
 
   return `执行动作：${getActionLabel(step.action, step.action_result.action_name)}`;

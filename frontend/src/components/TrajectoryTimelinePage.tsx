@@ -13,7 +13,7 @@ export function TrajectoryTimelinePage({ items, onBack }: Props) {
         <div>
           <span className="section-kicker">轨迹详情</span>
           <h1>Step 时间线</h1>
-          <p className="muted">按执行顺序查看每一步的摘要、动作、反馈、线索和详细思考。</p>
+          <p className="muted">按执行顺序查看每一步的 phase、situation analysis、decision、memory update、动作、反馈与机器人视角。</p>
         </div>
         <button className="ghost-button" type="button" onClick={onBack}>
           返回主页面

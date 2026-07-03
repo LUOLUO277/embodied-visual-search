@@ -8,7 +8,7 @@ from backend.envs.thor_env import thor_env
 from backend.memory.search_state import search_state
 from backend.memory.trajectory import trajectory_store
 from backend.schemas.action_schema import ActionRequest, HighLevelAction
-from backend.schemas.agent_schema import AgentActionResult, AgentThought
+from backend.schemas.agent_schema import AgentActionResult, AgentThought, MemoryUpdate, SearchMemorySnapshot
 from backend.schemas.env_schema import LoadSceneRequest, ObservationResponse
 
 router = APIRouter(prefix="/api", tags=["environment"])
@@ -68,11 +68,12 @@ def step_action(request: ActionRequest) -> ObservationResponse:
         scene=search_state.scene,
         task=search_state.task,
         thought=AgentThought(
-            situation_analysis=request.thought or "manual control",
-            spatial_reasoning="",
-            task_planning="Manual action execution.",
-            self_reflection="",
-            verification="",
+            phase="navigation",
+            situation_analysis=request.thought or "Manual control step.",
+            spatial_reasoning=None,
+            memory_reasoning=None,
+            verification=None,
+            decision="Execute the requested manual action.",
         ),
         action=HighLevelAction(name="observe", argument=request.action, confidence=None),
         action_result=AgentActionResult(
@@ -81,6 +82,14 @@ def step_action(request: ActionRequest) -> ObservationResponse:
             executed=True,
         ),
         raw_model_output="",
+        memory_update=MemoryUpdate(),
+        search_memory=SearchMemorySnapshot(
+            summary=search_state.semantic_memory.summary,
+            checked=list(search_state.semantic_memory.checked),
+            ruled_out=list(search_state.semantic_memory.ruled_out),
+            avoid=list(search_state.semantic_memory.avoid),
+            recent_clues=list(search_state.semantic_memory.recent_clues),
+        ),
         visible_objects=[item.model_dump() for item in observation.metadata.visible_objects],
         seen_object_ids=[item.objectId for item in observation.metadata.visible_objects],
         holding_objects=observation.metadata.inventory_objects,

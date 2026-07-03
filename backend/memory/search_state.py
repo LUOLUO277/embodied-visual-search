@@ -8,11 +8,10 @@ from backend.schemas.agent_schema import AgentStepResponse
 @dataclass
 class SemanticMemory:
     summary: str = "Search has not started yet."
-    searched_areas: list[str] = field(default_factory=list)
-    negative_findings: list[str] = field(default_factory=list)
-    positive_clues: list[str] = field(default_factory=list)
-    current_hypothesis: str = ""
-    failed_actions: list[dict[str, str]] = field(default_factory=list)
+    checked: list[str] = field(default_factory=list)
+    ruled_out: list[str] = field(default_factory=list)
+    avoid: list[str] = field(default_factory=list)
+    recent_clues: list[str] = field(default_factory=list)
 
 
 @dataclass

@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from backend.schemas.agent_schema import AgentActionResult, AgentThought, TrajectoryItem
+from backend.schemas.agent_schema import AgentActionResult, AgentThought, MemoryUpdate, SearchMemorySnapshot, TrajectoryItem
 from backend.schemas.action_schema import HighLevelAction
 
 
@@ -30,6 +30,8 @@ class TrajectoryStore:
         agent_pose: dict,
         robot_view: str,
         last_action_feedback: dict,
+        memory_update: MemoryUpdate | None = None,
+        search_memory: SearchMemorySnapshot | None = None,
     ) -> TrajectoryItem:
         item = TrajectoryItem(
             step=len(self.items) + 1,
@@ -39,6 +41,8 @@ class TrajectoryStore:
             action=action,
             action_result=action_result,
             raw_model_output=raw_model_output,
+            memory_update=memory_update,
+            search_memory=search_memory,
             visible_objects=visible_objects,
             seen_object_ids=seen_object_ids,
             holding_objects=holding_objects,

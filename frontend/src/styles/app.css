@@ -630,3 +630,30 @@ p {
 .compact-thought-box {
   font-size: 0.9rem;
 }
+.mode-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.mode-tag {
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid rgba(88, 148, 255, 0.24);
+  background: rgba(23, 35, 58, 0.95);
+  color: #b6ccff;
+  font-size: 0.78rem;
+}
+.phase-badge {
+  padding: 0.45rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid rgba(84, 195, 147, 0.28);
+  background: rgba(18, 58, 45, 0.92);
+  color: #8ff2c7;
+  font-size: 0.82rem;
+}
+
+.no-pad-stack {
+  padding: 0;
+}

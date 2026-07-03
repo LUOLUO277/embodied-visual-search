@@ -5,8 +5,12 @@ from dataclasses import dataclass, field
 from json import JSONDecodeError
 from typing import Any
 
-from backend.schemas.agent_schema import AgentActionResult, AgentThought
+from pydantic import ValidationError
+
+from backend.schemas.agent_schema import AgentActionResult, AgentThought, MemoryUpdate
 from backend.schemas.action_schema import HighLevelAction
+
+PHASES = {"initial_scan", "visual_search", "navigation", "interaction", "recovery", "completion_check"}
 
 
 @dataclass
@@ -14,7 +18,7 @@ class ParsedAgentOutput:
     thought: AgentThought
     action: HighLevelAction
     raw_json: dict[str, Any]
-    memory_update: dict[str, Any] = field(default_factory=dict)
+    memory_update: MemoryUpdate = field(default_factory=MemoryUpdate)
 
 
 class OutputParserError(ValueError):
@@ -31,20 +35,147 @@ class OutputParser:
         payload = OutputParser._load_json(raw_output)
         thought_payload = payload.get("thought")
         action_payload = payload.get("action")
-        memory_update = payload.get("memory_update") or {}
-        if not isinstance(memory_update, dict):
-            memory_update = {}
+        memory_update_payload = payload.get("memory_update") or {}
         if not isinstance(thought_payload, dict) or not isinstance(action_payload, dict):
             raise UnsupportedModelOutputError("Model output must contain object fields: thought and action.")
+        if not isinstance(memory_update_payload, dict):
+            memory_update_payload = {}
         action_payload = dict(action_payload)
         action_payload.setdefault("raw_json", payload)
         action_payload.setdefault("raw_text", raw_output)
-        return ParsedAgentOutput(
-            thought=AgentThought.model_validate(thought_payload),
-            action=HighLevelAction.model_validate(action_payload),
-            raw_json=payload,
-            memory_update=memory_update,
-        )
+        try:
+            action = HighLevelAction.model_validate(action_payload)
+            thought = AgentThought.model_validate(OutputParser._normalize_thought_payload(thought_payload, action))
+            memory_update = MemoryUpdate.model_validate(OutputParser._normalize_memory_update(memory_update_payload))
+        except ValidationError as exc:
+            raise OutputParserError(str(exc)) from exc
+        except ValueError as exc:
+            raise OutputParserError(str(exc)) from exc
+        return ParsedAgentOutput(thought=thought, action=action, raw_json=payload, memory_update=memory_update)
+
+    @staticmethod
+    def _normalize_thought_payload(thought_payload: dict[str, Any], action: HighLevelAction) -> dict[str, Any]:
+        phase = OutputParser._clean_text(thought_payload.get("phase"))
+        decision = OutputParser._clean_text(thought_payload.get("decision"))
+        memory_reasoning = OutputParser._clean_text(thought_payload.get("memory_reasoning"))
+        new_spatial = OutputParser._clean_text(thought_payload.get("spatial_reasoning"))
+        new_verification = OutputParser._clean_text(thought_payload.get("verification"))
+        new_situation = OutputParser._clean_text(thought_payload.get("situation_analysis"))
+
+        if phase or decision or memory_reasoning:
+            return {
+                "phase": OutputParser._normalize_phase(phase, action=action),
+                "situation_analysis": new_situation or decision or "",
+                "spatial_reasoning": new_spatial,
+                "memory_reasoning": memory_reasoning,
+                "verification": new_verification,
+                "decision": decision or new_situation or "",
+            }
+
+        brief = OutputParser._clean_text(thought_payload.get("brief"))
+        modes_raw = thought_payload.get("modes")
+        modes: list[str] = []
+        if isinstance(modes_raw, str):
+            modes_raw = [modes_raw]
+        if isinstance(modes_raw, list):
+            for item in modes_raw:
+                cleaned = OutputParser._clean_text(item)
+                if cleaned and cleaned not in modes:
+                    modes.append(cleaned)
+        if brief or modes:
+            inferred_phase = OutputParser._infer_phase_from_modes(modes, action)
+            return {
+                "phase": inferred_phase,
+                "situation_analysis": brief or "",
+                "spatial_reasoning": brief if "spatial_reasoning" in modes else None,
+                "memory_reasoning": brief if "self_reflection" in modes else None,
+                "verification": brief if "verification" in modes else None,
+                "decision": brief or "",
+            }
+
+        legacy_situation = OutputParser._clean_text(thought_payload.get("situation_analysis"))
+        legacy_spatial = OutputParser._clean_text(thought_payload.get("spatial_reasoning"))
+        legacy_plan = OutputParser._clean_text(thought_payload.get("task_planning"))
+        legacy_reflection = OutputParser._clean_text(thought_payload.get("self_reflection"))
+        legacy_verification = OutputParser._clean_text(thought_payload.get("verification"))
+        legacy_phase = OutputParser._infer_phase_from_legacy(action, legacy_reflection, legacy_verification)
+        decision_fallback = legacy_plan or legacy_situation or legacy_spatial or legacy_reflection or legacy_verification or ""
+        return {
+            "phase": legacy_phase,
+            "situation_analysis": legacy_situation or decision_fallback,
+            "spatial_reasoning": legacy_spatial,
+            "memory_reasoning": legacy_reflection,
+            "verification": legacy_verification,
+            "decision": decision_fallback,
+        }
+
+    @staticmethod
+    def _normalize_memory_update(memory_update_payload: dict[str, Any]) -> dict[str, Any]:
+        checked = OutputParser._clean_text(memory_update_payload.get("checked"))
+        ruled_out = OutputParser._clean_text(memory_update_payload.get("ruled_out"))
+        clue = OutputParser._clean_text(memory_update_payload.get("clue"))
+        avoid = OutputParser._clean_text(memory_update_payload.get("avoid"))
+
+        if not checked:
+            checked = (
+                OutputParser._clean_text(memory_update_payload.get("searched_area"))
+                or OutputParser._clean_text(memory_update_payload.get("observed_area"))
+                or OutputParser._clean_text(memory_update_payload.get("negative_finding"))
+            )
+        if not ruled_out:
+            ruled_out = OutputParser._clean_text(memory_update_payload.get("negative_finding"))
+        if not clue:
+            clue = (
+                OutputParser._clean_text(memory_update_payload.get("positive_clue"))
+                or OutputParser._clean_text(memory_update_payload.get("current_hypothesis"))
+            )
+        if not avoid:
+            avoid = OutputParser._clean_text(memory_update_payload.get("negative_finding"))
+
+        return {"checked": checked, "ruled_out": ruled_out, "clue": clue, "avoid": avoid}
+
+    @staticmethod
+    def _normalize_phase(phase: str | None, action: HighLevelAction) -> str:
+        if phase in PHASES:
+            return phase
+        return OutputParser._infer_phase_from_action(action)
+
+    @staticmethod
+    def _infer_phase_from_modes(modes: list[str], action: HighLevelAction) -> str:
+        if "self_reflection" in modes:
+            return "recovery"
+        if "verification" in modes and action.name in {"pickup", "end"}:
+            return "completion_check"
+        if not modes:
+            return OutputParser._infer_phase_from_action(action)
+        if "spatial_reasoning" in modes:
+            return "navigation" if action.name in {"move forward", "move back", "move left", "move right", "rotate left", "rotate right", "look up", "look down", "navigate to", "observe"} else "visual_search"
+        return "visual_search"
+
+    @staticmethod
+    def _infer_phase_from_legacy(action: HighLevelAction, legacy_reflection: str | None, legacy_verification: str | None) -> str:
+        if legacy_reflection:
+            return "recovery"
+        if legacy_verification and action.name in {"pickup", "end"}:
+            return "completion_check"
+        return OutputParser._infer_phase_from_action(action)
+
+    @staticmethod
+    def _infer_phase_from_action(action: HighLevelAction) -> str:
+        if action.name in {"move forward", "move back", "move left", "move right", "rotate left", "rotate right", "look up", "look down", "navigate to", "observe"}:
+            return "navigation"
+        if action.name in {"pickup", "put in", "toggle", "open", "close"}:
+            return "interaction"
+        if action.name == "end":
+            return "completion_check"
+        return "visual_search"
+
+    @staticmethod
+    def _clean_text(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        cleaned = value.strip()
+        return cleaned or None
 
     @staticmethod
     def _load_json(raw_output: str) -> dict:

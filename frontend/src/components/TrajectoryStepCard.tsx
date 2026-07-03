@@ -5,9 +5,11 @@ import {
   getConfidenceLabel,
   getFeedbackLabel,
   getMemoryUpdate,
+  getSearchMemory,
   getStepImageSource,
   getStepStatus,
   getStepSummary,
+  getThoughtPhase,
   getThoughtSections,
 } from "../utils/agentPresentation";
 
@@ -27,12 +29,26 @@ function renderMemoryRow(label: string, value: string | null | undefined) {
   );
 }
 
+function renderMemoryList(label: string, values: string[]) {
+  if (values.length === 0) {
+    return null;
+  }
+  return (
+    <div className="memory-row">
+      <span>{label}</span>
+      <p>{values.join("; ")}</p>
+    </div>
+  );
+}
+
 export function TrajectoryStepCard({ item }: Props) {
   const status = getStepStatus(item);
   const memory = getMemoryUpdate(item);
-  const thoughtSections = getThoughtSections(item.thought).filter((section) => section.value);
+  const searchMemory = getSearchMemory(item, null);
   const imageSource = getStepImageSource(item);
   const confidence = getConfidenceLabel(item.action);
+  const phase = getThoughtPhase(item.thought);
+  const thoughtSections = getThoughtSections(item.thought).filter((section) => section.value);
 
   return (
     <article className="timeline-card">
@@ -43,6 +59,7 @@ export function TrajectoryStepCard({ item }: Props) {
         </div>
         <div className="timeline-card-badges">
           <span className={`status-badge tone-${status.tone}`}>{status.label}</span>
+          <span className="phase-badge">{phase}</span>
           {confidence ? <span className="neutral-badge">置信度 {confidence}</span> : null}
         </div>
       </div>
@@ -68,24 +85,16 @@ export function TrajectoryStepCard({ item }: Props) {
               <strong>{getFeedbackLabel(item)}</strong>
             </div>
             <div>
-              <span>当前假设</span>
-              <strong>{memory.current_hypothesis ?? "-"}</strong>
-            </div>
-            <div>
-              <span>正向线索</span>
-              <strong>{memory.positive_clue ?? "-"}</strong>
-            </div>
-            <div>
-              <span>负向发现</span>
-              <strong>{memory.negative_finding ?? "-"}</strong>
+              <span>Phase</span>
+              <strong>{phase}</strong>
             </div>
           </div>
         </div>
       </div>
 
       {thoughtSections.length > 0 ? (
-        <details className="detail-accordion">
-          <summary>详细思考</summary>
+        <details className="detail-accordion" open>
+          <summary>Thought</summary>
           <div className="detail-stack detail-stack-tight">
             {thoughtSections.map((section) => (
               <div key={section.key} className="detail-card">
@@ -100,15 +109,31 @@ export function TrajectoryStepCard({ item }: Props) {
       <details className="detail-accordion">
         <summary>记忆更新</summary>
         <div className="memory-stack">
-          {renderMemoryRow("Observed", memory.observed_area)}
-          {renderMemoryRow("Searched", memory.searched_area)}
-          {renderMemoryRow("Negative", memory.negative_finding)}
-          {renderMemoryRow("Positive", memory.positive_clue)}
-          {renderMemoryRow("Hypothesis", memory.current_hypothesis)}
-          {renderMemoryRow("Summary", memory.summary)}
-          {!memory.observed_area && !memory.searched_area && !memory.negative_finding && !memory.positive_clue && !memory.current_hypothesis && !memory.summary ? (
-            <p className="muted">暂无记忆更新。</p>
-          ) : null}
+          {renderMemoryRow("Checked", memory.checked)}
+          {renderMemoryRow("Ruled Out", memory.ruled_out)}
+          {renderMemoryRow("Clue", memory.clue)}
+          {renderMemoryRow("Avoid", memory.avoid)}
+          {!memory.checked && !memory.ruled_out && !memory.clue && !memory.avoid ? <p className="muted">暂无记忆更新。</p> : null}
+        </div>
+      </details>
+
+      <details className="detail-accordion">
+        <summary>Search Memory</summary>
+        <div className="memory-stack">
+          {searchMemory ? (
+            <>
+              <div className="decision-field">
+                <span className="decision-field-label">Summary</span>
+                <p>{searchMemory.summary}</p>
+              </div>
+              {renderMemoryList("Checked", searchMemory.checked)}
+              {renderMemoryList("Ruled Out", searchMemory.ruled_out)}
+              {renderMemoryList("Avoid", searchMemory.avoid)}
+              {renderMemoryList("Recent Clues", searchMemory.recent_clues)}
+            </>
+          ) : (
+            <p className="muted">暂无 search memory。</p>
+          )}
         </div>
       </details>
     </article>
