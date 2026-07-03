@@ -11,20 +11,23 @@ export function TrajectoryPanel({ items }: Props) {
       {items.length === 0 ? (
         <div className="empty">No trajectory yet</div>
       ) : (
-        <div className="trajectory-list">
+        <div className="trajectory-list trajectory-visual-list">
           {items.map((item) => (
-            <article key={item.step} className="trajectory-item">
-              <div className="trajectory-header">
-                <strong>Step {item.step}</strong>
-                <span>{item.action}</span>
-                <span>{item.success ? "success" : "failed"}</span>
-              </div>
-              <div className="trajectory-body">
-                <p>Scene: {item.scene}</p>
-                <p>Task: {item.task || "None"}</p>
-                <p>Thought: {item.thought}</p>
-                <p>Error: {item.error_message || "-"}</p>
-                <p>Visible Objects: {item.visible_objects.join(", ") || "-"}</p>
+            <article key={item.step} className="trajectory-item trajectory-visual-item">
+              <img className="trajectory-preview" src={item.robot_view} alt={`Robot view at step ${item.step}`} />
+              <div className="trajectory-content">
+                <div className="trajectory-header">
+                  <strong>Step {item.step}</strong>
+                  <span>{item.action}</span>
+                  <span>{item.success ? "success" : "failed"}</span>
+                </div>
+                <div className="trajectory-body">
+                  <p>Scene: {item.scene}</p>
+                  <p>Task: {item.task || "None"}</p>
+                  <p>Thought: {item.thought}</p>
+                  <p>Error: {item.error_message || "-"}</p>
+                  <p>Visible Objects: {item.visible_objects.join(", ") || "-"}</p>
+                </div>
               </div>
             </article>
           ))}

@@ -25,6 +25,7 @@ class TrajectoryStore:
         error_message: str,
         visible_objects: list[str],
         agent_pose: dict,
+        robot_view: str,
     ) -> TrajectoryItem:
         item = TrajectoryItem(
             step=len(self.items) + 1,
@@ -36,6 +37,7 @@ class TrajectoryStore:
             error_message=error_message,
             visible_objects=visible_objects,
             agent_pose=agent_pose,
+            robot_view=robot_view,
         )
         self.items.append(item)
         self._persist()

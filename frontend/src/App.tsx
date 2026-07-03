@@ -1,11 +1,21 @@
 import { useEffect, useState } from "react";
-import { api, type Observation, type ScenePayload, type TrajectoryItem } from "./api/client";
+import { api, type Observation, type RoomViewHit, type ScenePayload, type TrajectoryItem } from "./api/client";
 import { AgentPanel } from "./components/AgentPanel";
 import { ManualControl } from "./components/ManualControl";
 import { RobotView } from "./components/RobotView";
 import { RoomView } from "./components/RoomView";
 import { ScenePanel } from "./components/ScenePanel";
 import { TrajectoryPanel } from "./components/TrajectoryPanel";
+
+const EMPTY_ROOM_HIT: RoomViewHit = {
+  hit: false,
+  pixel_x: 0,
+  pixel_y: 0,
+  normalized_x: 0,
+  normalized_y: 0,
+  object: null,
+  message: "",
+};
 
 function App() {
   const [scenes, setScenes] = useState<ScenePayload | null>(null);
@@ -87,6 +97,32 @@ function App() {
     }
   }
 
+  async function handleRoomOrbit(deltaYaw: number, deltaPitch: number) {
+    if (!observation) {
+      return;
+    }
+
+    try {
+      const result = await api.orbitRoomView(deltaYaw, deltaPitch);
+      syncObservation(result);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function handleRoomInspect(x: number, y: number): Promise<RoomViewHit> {
+    if (!observation?.room_view) {
+      return EMPTY_ROOM_HIT;
+    }
+
+    try {
+      return await api.inspectRoomView(x, y);
+    } catch (err) {
+      setError(String(err));
+      return EMPTY_ROOM_HIT;
+    }
+  }
+
   function handleRoomTypeChange(nextRoomType: string) {
     setRoomType(nextRoomType);
     const nextScene = scenes?.scenes_by_room[nextRoomType]?.[0] ?? "";
@@ -127,7 +163,13 @@ function App() {
         <div className="content">
           <section className="view-grid">
             <RobotView image={observation?.robot_view ?? null} />
-            <RoomView image={observation?.room_view ?? null} />
+            <RoomView
+              image={observation?.room_view ?? null}
+              camera={observation?.metadata.room_camera ?? null}
+              disabled={!observation || loading}
+              onInspect={handleRoomInspect}
+              onOrbit={handleRoomOrbit}
+            />
           </section>
 
           <section className="panel metadata-panel">
@@ -137,6 +179,7 @@ function App() {
                 <p>Scene: {observation.metadata.scene_name}</p>
                 <p>Pose: {JSON.stringify(observation.metadata.agent_pose)}</p>
                 <p>Visible Objects: {observation.metadata.visible_objects.join(", ") || "-"}</p>
+                <p>Room Camera: {observation.metadata.room_camera ? JSON.stringify(observation.metadata.room_camera.rotation) : "-"}</p>
                 <p>Error: {observation.metadata.error_message || "-"}</p>
               </>
             ) : (

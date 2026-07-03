@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
@@ -67,5 +67,6 @@ def step_action(request: ActionRequest) -> ObservationResponse:
         error_message=observation.metadata.error_message,
         visible_objects=observation.metadata.visible_objects,
         agent_pose=observation.metadata.agent_pose.model_dump(),
+        robot_view=observation.robot_view,
     )
     return observation

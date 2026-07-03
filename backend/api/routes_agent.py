@@ -35,6 +35,7 @@ def agent_step(request: AgentStepRequest) -> AgentStepResponse:
         error_message=observation.metadata.error_message,
         visible_objects=observation.metadata.visible_objects,
         agent_pose=observation.metadata.agent_pose.model_dump(),
+        robot_view=observation.robot_view,
     )
     return AgentStepResponse(decision=decision, observation=observation, trajectory=trajectory_item)
 

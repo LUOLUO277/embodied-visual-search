@@ -4,6 +4,25 @@ export type ScenePayload = {
   all_scenes: string[];
 };
 
+export type RoomObjectInfo = {
+  object_id: string;
+  object_type: string;
+  name: string;
+  distance?: number | null;
+  position?: Record<string, number> | null;
+  attributes: Record<string, string | number | boolean | null>;
+};
+
+export type RoomViewHit = {
+  hit: boolean;
+  pixel_x: number;
+  pixel_y: number;
+  normalized_x: number;
+  normalized_y: number;
+  object?: RoomObjectInfo | null;
+  message: string;
+};
+
 export type Observation = {
   robot_view: string;
   room_view: string | null;
@@ -18,6 +37,15 @@ export type Observation = {
     last_action_success: boolean;
     error_message: string;
     task?: string | null;
+    room_camera?: {
+      position: Record<string, number>;
+      rotation: Record<string, number>;
+      target: Record<string, number>;
+      field_of_view: number;
+      distance: number;
+      yaw: number;
+      pitch: number;
+    } | null;
   };
 };
 
@@ -31,6 +59,7 @@ export type TrajectoryItem = {
   error_message: string;
   visible_objects: string[];
   agent_pose: Record<string, unknown>;
+  robot_view: string;
 };
 
 export type AgentStepResponse = {
@@ -75,4 +104,14 @@ export const api = {
       body: JSON.stringify({ task }),
     }),
   getTrajectory: () => request<{ items: TrajectoryItem[] }>("/api/trajectory"),
+  orbitRoomView: (deltaYaw: number, deltaPitch: number) =>
+    request<Observation>("/api/camera/room/orbit", {
+      method: "POST",
+      body: JSON.stringify({ delta_yaw: deltaYaw, delta_pitch: deltaPitch }),
+    }),
+  inspectRoomView: (x: number, y: number) =>
+    request<RoomViewHit>("/api/camera/room/inspect", {
+      method: "POST",
+      body: JSON.stringify({ x, y }),
+    }),
 };

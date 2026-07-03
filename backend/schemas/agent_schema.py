@@ -26,6 +26,7 @@ class TrajectoryItem(BaseModel):
     error_message: str
     visible_objects: list[str]
     agent_pose: dict[str, Any]
+    robot_view: str
 
 
 class AgentStepResponse(BaseModel):
