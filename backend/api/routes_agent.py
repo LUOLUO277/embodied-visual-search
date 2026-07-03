@@ -53,7 +53,7 @@ def agent_run(request: AgentRunRequest) -> list[AgentStepResponse]:
     try:
         while not search_state.agent_done and not search_state.agent_stopped and search_state.current_step < search_state.max_steps:
             results.append(agent.step(execute=request.execute))
-            if results[-1].action_result.error_type in {"parse_error", "action_error"} and not results[-1].action_result.success:
+            if results[-1].action_result.error_type == "parse_error" and not results[-1].action_result.success:
                 break
         return results
     except Exception as exc:

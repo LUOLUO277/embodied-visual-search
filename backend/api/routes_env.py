@@ -56,6 +56,8 @@ def step_action(request: ActionRequest) -> ObservationResponse:
         observation = thor_env.step(action_name=request.action)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     trajectory_store.record(
         scene=search_state.scene,

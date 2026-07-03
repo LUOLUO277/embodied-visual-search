@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import {
   api,
   type AgentState,
@@ -39,6 +39,7 @@ function App() {
   const [latestStep, setLatestStep] = useState<AgentStepResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const stopRequestedRef = useRef(false);
 
   useEffect(() => {
     void bootstrap();
@@ -73,7 +74,9 @@ function App() {
   }
 
   async function refreshAgentState() {
-    setAgentState(await api.getAgentState());
+    const nextState = await api.getAgentState();
+    setAgentState(nextState);
+    return nextState;
   }
 
   async function handleLoad() {
@@ -105,6 +108,7 @@ function App() {
   }
 
   async function handleAgentReset() {
+    stopRequestedRef.current = false;
     const result = await api.resetAgent(taskInstruction, maxSteps);
     setAgentState(result);
     setLatestStep(null);
@@ -115,16 +119,22 @@ function App() {
   async function handleAgentStart() {
     try {
       setLoading(true);
-      await handleAgentReset();
-      const result = await api.runAgent(true);
-      const last = result[result.length - 1] ?? null;
-      setLatestStep(last);
-      if (last?.robot_view) {
-        const nextObservation = await api.getObservation();
-        syncObservation(nextObservation);
+      stopRequestedRef.current = false;
+      let state = await handleAgentReset();
+
+      while (!stopRequestedRef.current && state.active && !state.done && state.current_step < state.max_steps) {
+        const stepResult = await api.stepAgent(true);
+        setLatestStep(stepResult);
+        setTrajectory(stepResult.trajectory);
+        if (stepResult.robot_view) {
+          const nextObservation = await api.getObservation();
+          syncObservation(nextObservation);
+        }
+        state = await refreshAgentState();
+        if (stepResult.action_result.error_type === "parse_error" && !stepResult.action_result.success) {
+          break;
+        }
       }
-      await refreshTrajectory();
-      await refreshAgentState();
     } catch (err) {
       setError(String(err));
     } finally {
@@ -163,6 +173,7 @@ function App() {
 
   async function handleAgentStop() {
     try {
+      stopRequestedRef.current = true;
       setAgentState(await api.stopAgent());
     } catch (err) {
       setError(String(err));

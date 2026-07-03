@@ -75,9 +75,26 @@ export type AgentThought = {
 };
 
 export type HighLevelAction = {
-  name: "observe" | "move forward" | "navigate to" | "pickup" | "put in" | "toggle" | "open" | "close" | "end";
+  name:
+    | "observe"
+    | "move forward"
+    | "move back"
+    | "move left"
+    | "move right"
+    | "rotate left"
+    | "rotate right"
+    | "look up"
+    | "look down"
+    | "navigate to"
+    | "pickup"
+    | "put in"
+    | "toggle"
+    | "open"
+    | "close"
+    | "end";
   argument?: string | null;
   confidence?: number | null;
+  repetitions?: number;
   raw_text?: string | null;
   raw_json?: Record<string, unknown> | null;
 };

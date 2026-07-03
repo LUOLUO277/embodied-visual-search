@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+from http.client import RemoteDisconnected
 from json import JSONDecodeError
 from typing import Any
 from urllib import error, request
@@ -27,26 +28,46 @@ class OpenAICompatibleClient:
             ],
             "temperature": self.settings.temperature,
             "max_tokens": self.settings.max_tokens,
+            "stream": False,
         }
         http_request = request.Request(
             url=f"{self.settings.base_url.rstrip('/')}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Content-Type": "application/json",
+                "Accept": "application/json",
                 "Authorization": f"Bearer {self.settings.api_key}",
             },
             method="POST",
         )
-        try:
-            with request.urlopen(http_request, timeout=self.settings.timeout) as response:
-                body = response.read().decode("utf-8", errors="replace")
-        except error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"Model request failed with HTTP {exc.code}: {detail or exc.reason}") from exc
-        except error.URLError as exc:
-            raise RuntimeError(f"Model request failed: {exc.reason}") from exc
+
+        body = ""
+        last_error: Exception | None = None
+        for attempt in range(2):
+            try:
+                with request.urlopen(http_request, timeout=self.settings.timeout) as response:
+                    body = response.read().decode("utf-8", errors="replace")
+                break
+            except error.HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="ignore")
+                raise RuntimeError(f"Model request failed with HTTP {exc.code}: {detail or exc.reason}") from exc
+            except error.URLError as exc:
+                raise RuntimeError(f"Model request failed: {exc.reason}") from exc
+            except (RemoteDisconnected, ConnectionResetError, TimeoutError, OSError) as exc:
+                last_error = exc
+                if attempt == 1:
+                    raise RuntimeError(
+                        "Model service closed the connection before returning a complete response. "
+                        "This usually means the upstream OpenAI-compatible proxy generated output but terminated the HTTP connection early. "
+                        "Please retry, increase timeout, or switch to a more stable base_url/provider."
+                    ) from exc
 
         if not body.strip():
+            if last_error is not None:
+                raise RuntimeError(
+                    "Model response body is empty after the upstream connection was interrupted. "
+                    "Please check whether the provider supports non-streaming /chat/completions responses."
+                ) from last_error
             raise RuntimeError("Model response body is empty. Check whether base_url points to a valid OpenAI-compatible /chat/completions service.")
 
         try:

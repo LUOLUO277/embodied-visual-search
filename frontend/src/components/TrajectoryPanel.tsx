@@ -13,6 +13,12 @@ function renderImageSource(item: TrajectoryItem): string {
   return `data:image/png;base64,${item.robot_view}`;
 }
 
+function formatActionLabel(item: TrajectoryItem): string {
+  const repetitions = item.action.repetitions && item.action.repetitions > 1 ? ` x${item.action.repetitions}` : "";
+  const argument = item.action.argument ? ` ${item.action.argument}` : "";
+  return `${item.action.name}${repetitions}${argument}`;
+}
+
 export function TrajectoryPanel({ items }: Props) {
   return (
     <section className="panel side-panel trajectory-side-panel">
@@ -29,7 +35,7 @@ export function TrajectoryPanel({ items }: Props) {
               <div className="trajectory-content">
                 <div className="trajectory-header">
                   <strong>Step {item.step}</strong>
-                  <span>{item.action.name}{item.action.argument ? ` ${item.action.argument}` : ""}</span>
+                  <span>{formatActionLabel(item)}</span>
                 </div>
                 <div className="trajectory-body compact-trajectory-body">
                   <p>结果：{item.action_result.success ? "success" : "failed"}</p>

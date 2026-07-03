@@ -14,6 +14,12 @@ type Props = {
   onStop: () => void;
 };
 
+function formatActionLabel(step: AgentStepResponse["action"]): string {
+  const repetitions = step.repetitions && step.repetitions > 1 ? ` x${step.repetitions}` : "";
+  const argument = step.argument ? ` ${step.argument}` : "";
+  return `${step.name}${repetitions}${argument}`;
+}
+
 export function AgentPanel({
   taskInstruction,
   maxSteps,
@@ -58,7 +64,7 @@ export function AgentPanel({
       {latestStep ? (
         <div className="thought-box compact-thought-box">
           <strong>最近决策</strong>
-          <div>动作：{latestStep.action.name}{latestStep.action.argument ? ` ${latestStep.action.argument}` : ""}</div>
+          <div>动作：{formatActionLabel(latestStep.action)}</div>
           <div>置信度：{latestStep.action.confidence ?? "-"}</div>
           <div>选择对象：{latestStep.action_result.selected_object_id || "-"}</div>
           <div>结果：{latestStep.action_result.success ? "success" : "failed"} {latestStep.action_result.message || ""}</div>

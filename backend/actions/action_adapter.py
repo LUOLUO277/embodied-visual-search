@@ -1,12 +1,12 @@
 ﻿from __future__ import annotations
 
+import copy
 import math
 from dataclasses import dataclass
 from typing import Any
 
 from backend.actions import base_action
 from backend.actions.object_resolver import ObjectResolver
-from backend.envs.frame_utils import ndarray_to_base64_png
 from backend.schemas.action_schema import HighLevelAction
 from backend.schemas.agent_schema import AgentActionResult
 
@@ -19,30 +19,42 @@ class AdaptedAction:
 
 
 MANUAL_ACTION_PAYLOADS = {
-    "MoveAhead": {"action": "MoveAhead", "moveMagnitude": 0.25},
-    "MoveBack": {"action": "MoveBack", "moveMagnitude": 0.25},
-    "MoveLeft": {"action": "MoveLeft", "moveMagnitude": 0.25},
-    "MoveRight": {"action": "MoveRight", "moveMagnitude": 0.25},
-    "RotateLeft": {"action": "RotateLeft", "degrees": 30},
-    "RotateRight": {"action": "RotateRight", "degrees": 30},
-    "LookUp": {"action": "LookUp", "degrees": 15},
-    "LookDown": {"action": "LookDown", "degrees": 15},
-    "Done": {"action": "Done"},
+    "move forward": {"action": "MoveAhead", "moveMagnitude": 0.25},
+    "move back": {"action": "MoveBack", "moveMagnitude": 0.25},
+    "move left": {"action": "MoveLeft", "moveMagnitude": 0.25},
+    "move right": {"action": "MoveRight", "moveMagnitude": 0.25},
+    "rotate left": {"action": "RotateLeft", "degrees": 30},
+    "rotate right": {"action": "RotateRight", "degrees": 30},
+    "look up": {"action": "LookUp", "degrees": 15},
+    "look down": {"action": "LookDown", "degrees": 15},
+}
+
+LOW_LEVEL_ACTION_ALIASES = {
+    "MoveAhead": "move forward",
+    "MoveBack": "move back",
+    "MoveLeft": "move left",
+    "MoveRight": "move right",
+    "RotateLeft": "rotate left",
+    "RotateRight": "rotate right",
+    "LookUp": "look up",
+    "LookDown": "look down",
 }
 
 
 def get_action_payload(action_name: str) -> dict[str, Any]:
-    if action_name not in MANUAL_ACTION_PAYLOADS:
+    normalized = LOW_LEVEL_ACTION_ALIASES.get(action_name, action_name)
+    payload = MANUAL_ACTION_PAYLOADS.get(normalized)
+    if payload is None:
         raise ValueError(f"Unsupported action: {action_name}")
-    return MANUAL_ACTION_PAYLOADS[action_name]
+    return dict(payload)
 
 
 def adapt_high_level_action(action: HighLevelAction, env: Any) -> AdaptedAction:
     normalized = action.name
     if normalized == "end":
         return AdaptedAction(kind="end")
-    if normalized == "move forward":
-        return AdaptedAction(kind="controller_step", payload={"action": "MoveAhead", "moveMagnitude": 0.25})
+    if normalized in MANUAL_ACTION_PAYLOADS:
+        return AdaptedAction(kind="controller_step", payload=MANUAL_ACTION_PAYLOADS[normalized])
     if normalized == "observe":
         return AdaptedAction(kind="observe")
     if normalized == "navigate to":
@@ -52,37 +64,54 @@ def adapt_high_level_action(action: HighLevelAction, env: Any) -> AdaptedAction:
     raise ValueError(f"Unsupported high-level action: {action.name}")
 
 
-def execute_high_level_action(action: HighLevelAction, env: Any) -> AgentActionResult:
+def execute_high_level_action(
+    action: HighLevelAction,
+    env: Any,
+    visible_ref_map: dict[str, str] | None = None,
+) -> AgentActionResult:
     adapted = adapt_high_level_action(action, env)
     if adapted.kind == "end":
         return _build_result(action=action, env=env, success=True, executed=False, done=True, message="LLM ended the task.")
     if adapted.kind == "controller_step":
-        env.perform_controller_action(adapted.payload or {})
-        return _result_from_event(action=action, env=env, executed=True, adapted_action=adapted.payload)
+        return _execute_controller_step(action=action, env=env, payload=adapted.payload or {})
     if adapted.kind == "observe":
         return _execute_observe(action, env)
     if adapted.kind == "navigate":
-        return _execute_navigate(action, env)
+        return _execute_navigate(action, env, visible_ref_map)
     if adapted.kind == "interaction":
-        return _execute_interaction(action, env)
+        return _execute_interaction(action, env, visible_ref_map)
     raise ValueError(f"Unsupported adapted action kind: {adapted.kind}")
 
 
-def _execute_navigate(action: HighLevelAction, env: Any) -> AgentActionResult:
+def _execute_controller_step(action: HighLevelAction, env: Any, payload: dict[str, Any]) -> AgentActionResult:
+    repetitions = max(1, int(action.repetitions or 1))
+    last_payload = copy.deepcopy(payload)
+    for _ in range(repetitions):
+        env.perform_controller_action(copy.deepcopy(payload))
+        metadata = env.require_metadata()
+        if not bool(metadata.get("lastActionSuccess", True)):
+            return _result_from_event(
+                action=action,
+                env=env,
+                executed=True,
+                adapted_action={"sequence": payload.get("action"), "repetitions": repetitions},
+            )
+    return _result_from_event(
+        action=action,
+        env=env,
+        executed=True,
+        adapted_action={**last_payload, "repetitions": repetitions},
+        message=f"Executed {action.name} x{repetitions}." if repetitions > 1 else None,
+    )
+
+
+def _execute_navigate(action: HighLevelAction, env: Any, visible_ref_map: dict[str, str] | None) -> AgentActionResult:
     controller = env.require_controller()
     metadata = env.require_metadata()
     resolver = ObjectResolver(metadata)
-    resolved = resolver.resolve(action.argument)
+    resolved = resolver.resolve_visible_ref(action.argument, visible_ref_map)
     if not resolved.success or resolved.resolved is None:
-        return _build_result(
-            action=action,
-            env=env,
-            success=False,
-            message=resolved.message,
-            error=resolved.message,
-            error_type="illegal_action",
-            executed=False,
-        )
+        return _visible_only_illegal(action, env, action.argument)
 
     target = resolved.resolved
     for candidate in _candidate_navigation_poses(env, target.metadata)[:5]:
@@ -197,21 +226,13 @@ def _execute_observe(action: HighLevelAction, env: Any) -> AgentActionResult:
     )
 
 
-def _execute_interaction(action: HighLevelAction, env: Any) -> AgentActionResult:
+def _execute_interaction(action: HighLevelAction, env: Any, visible_ref_map: dict[str, str] | None) -> AgentActionResult:
     controller = env.require_controller()
     metadata = env.require_metadata()
     resolver = ObjectResolver(metadata)
-    resolved = resolver.resolve(action.argument)
+    resolved = resolver.resolve_visible_ref(action.argument, visible_ref_map)
     if not resolved.success or resolved.resolved is None:
-        return _build_result(
-            action=action,
-            env=env,
-            success=False,
-            message=resolved.message,
-            error=resolved.message,
-            error_type="illegal_action",
-            executed=False,
-        )
+        return _visible_only_illegal(action, env, action.argument)
     target = resolved.resolved
     target_meta = target.metadata
     name = action.name
@@ -250,6 +271,20 @@ def _execute_interaction(action: HighLevelAction, env: Any) -> AgentActionResult
 
     env.refresh_room_camera()
     return _result_from_event(action=action, env=env, executed=True, adapted_action={"action": name, "objectId": target.object_id}, selected_object=target_meta)
+
+
+def _visible_only_illegal(action: HighLevelAction, env: Any, argument: str | None) -> AgentActionResult:
+    argument_text = (argument or "").strip() or "<missing>"
+    message = f"Object '{argument_text}' is not visible in the current observation. Observe, rotate, or move closer first."
+    return _build_result(
+        action=action,
+        env=env,
+        success=False,
+        message=message,
+        error=message,
+        error_type="illegal_action",
+        executed=False,
+    )
 
 
 def _illegal(action: HighLevelAction, env: Any, selected_object: dict[str, Any] | None, message: str) -> AgentActionResult:
@@ -333,17 +368,3 @@ def look_at_rotation(agent_pos: dict[str, Any], object_pos: dict[str, Any]) -> f
     dx = float(object_pos.get("x", 0.0)) - float(agent_pos.get("x", 0.0))
     dz = float(object_pos.get("z", 0.0)) - float(agent_pos.get("z", 0.0))
     return (math.degrees(math.atan2(dx, dz)) + 360.0) % 360.0
-
-
-def summarize_visible_objects(env: Any) -> list[dict[str, Any]]:
-    metadata = env.require_metadata()
-    return [
-        {
-            "objectId": str(obj.get("objectId") or ""),
-            "objectType": str(obj.get("objectType") or ""),
-            "visible": bool(obj.get("visible")),
-            "distance": obj.get("distance"),
-        }
-        for obj in metadata.get("objects") or []
-        if obj.get("visible")
-    ]

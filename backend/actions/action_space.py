@@ -18,6 +18,13 @@ class ActionName(str, Enum):
 HIGH_LEVEL_ACTIONS = [
     "observe",
     "move forward",
+    "move back",
+    "move left",
+    "move right",
+    "rotate left",
+    "rotate right",
+    "look up",
+    "look down",
     "navigate to",
     "pickup",
     "put in",

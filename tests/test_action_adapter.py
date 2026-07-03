@@ -3,7 +3,7 @@
 import unittest
 from types import SimpleNamespace
 
-from backend.actions.action_adapter import execute_high_level_action
+from backend.actions.action_adapter import adapt_high_level_action, execute_high_level_action
 from backend.actions.object_resolver import ObjectResolver
 from backend.schemas.action_schema import HighLevelAction
 
@@ -13,6 +13,7 @@ class FakeEnv:
         self._metadata = metadata
         self.last_event = SimpleNamespace(metadata=metadata, frame=None)
         self.controller = object()
+        self.performed_actions: list[dict] = []
 
     def require_metadata(self):
         return self._metadata
@@ -21,6 +22,7 @@ class FakeEnv:
         return self.controller
 
     def perform_controller_action(self, payload):
+        self.performed_actions.append(dict(payload))
         self._metadata["lastAction"] = payload.get("action", "")
         self._metadata["lastActionSuccess"] = True
         self._metadata["errorMessage"] = ""
@@ -80,6 +82,7 @@ class ActionAdapterTests(unittest.TestCase):
                 },
             ],
         }
+        self.visible_ref_map = {"Drawer_1": "Drawer|-01.00|+00.00|+01.00", "Sofa_1": "Sofa|+01.00|+00.00|+02.00"}
 
     def test_object_resolver_supports_type_indexed_and_object_id(self):
         resolver = ObjectResolver(self.metadata)
@@ -94,19 +97,72 @@ class ActionAdapterTests(unittest.TestCase):
         self.assertTrue(by_id.success)
         self.assertEqual(by_id.resolved.object_id, "Drawer|-01.00|+00.00|+01.00")
 
+    def test_resolve_visible_ref_requires_current_ref(self):
+        resolver = ObjectResolver(self.metadata)
+        resolved = resolver.resolve_visible_ref("Drawer_1", self.visible_ref_map)
+        missing = resolver.resolve_visible_ref("Drawer_2", self.visible_ref_map)
+
+        self.assertTrue(resolved.success)
+        self.assertEqual(resolved.resolved.object_id, "Drawer|-01.00|+00.00|+01.00")
+        self.assertFalse(missing.success)
+        self.assertIn("not visible", missing.message)
+
     def test_put_in_fails_when_inventory_is_empty(self):
         env = FakeEnv(self.metadata)
-        result = execute_high_level_action(HighLevelAction(name="put in", argument="Drawer"), env)
+        result = execute_high_level_action(HighLevelAction(name="put in", argument="Drawer_1"), env, visible_ref_map=self.visible_ref_map)
 
         self.assertFalse(result.success)
         self.assertIn("Inventory is empty", result.message)
 
     def test_open_fails_for_non_openable_object(self):
         env = FakeEnv(self.metadata)
-        result = execute_high_level_action(HighLevelAction(name="open", argument="Sofa"), env)
+        result = execute_high_level_action(HighLevelAction(name="open", argument="Sofa_1"), env, visible_ref_map=self.visible_ref_map)
 
         self.assertFalse(result.success)
         self.assertIn("not openable", result.message)
+
+    def test_interaction_rejects_non_visible_refs(self):
+        env = FakeEnv(self.metadata)
+        result = execute_high_level_action(HighLevelAction(name="pickup", argument="Drawer_2"), env, visible_ref_map=self.visible_ref_map)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_type, "illegal_action")
+        self.assertIn("Observe, rotate, or move closer first", result.message)
+
+    def test_navigation_rejects_non_visible_refs(self):
+        env = FakeEnv(self.metadata)
+        result = execute_high_level_action(HighLevelAction(name="navigate to", argument="Drawer_2"), env, visible_ref_map=self.visible_ref_map)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error_type, "illegal_action")
+        self.assertIn("not visible", result.message)
+
+    def test_new_exploration_actions_are_adapted(self):
+        expectations = {
+            "move back": "MoveBack",
+            "move left": "MoveLeft",
+            "move right": "MoveRight",
+            "rotate left": "RotateLeft",
+            "rotate right": "RotateRight",
+            "look up": "LookUp",
+            "look down": "LookDown",
+        }
+
+        for high_level_name, controller_name in expectations.items():
+            adapted = adapt_high_level_action(HighLevelAction(name=high_level_name), env=FakeEnv(self.metadata))
+            self.assertEqual(adapted.kind, "controller_step")
+            self.assertEqual(adapted.payload["action"], controller_name)
+
+    def test_repeated_movement_executes_multiple_steps(self):
+        env = FakeEnv(self.metadata)
+        action = HighLevelAction.model_validate({"name": "move forward*3"})
+        result = execute_high_level_action(action, env)
+
+        self.assertTrue(result.success)
+        self.assertEqual(action.name, "move forward")
+        self.assertEqual(action.repetitions, 3)
+        self.assertEqual(len(env.performed_actions), 3)
+        self.assertEqual(result.message, "Executed move forward x3.")
 
 
 if __name__ == "__main__":

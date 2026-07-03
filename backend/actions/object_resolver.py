@@ -77,6 +77,16 @@ class ObjectResolver:
             return self._resolve_from_candidates(exact_type_matches, text)
         return ResolveResult(success=False, message=f"Unable to resolve object '{text}'.")
 
+    def resolve_visible_ref(self, ref: str | None, visible_ref_map: dict[str, str] | None) -> ResolveResult:
+        if not ref or not ref.strip():
+            return ResolveResult(success=False, message="Action requires a visible object ref.")
+        if not visible_ref_map:
+            return ResolveResult(success=False, message="No visible objects are available for interaction.")
+        object_id = visible_ref_map.get(ref.strip())
+        if not object_id:
+            return ResolveResult(success=False, message=f"Object '{ref}' is not visible in the current observation.")
+        return self._resolve_object_id(object_id)
+
     def _resolve_object_id(self, object_id: str) -> ResolveResult:
         obj = self.by_object_id.get(object_id)
         if obj is None:

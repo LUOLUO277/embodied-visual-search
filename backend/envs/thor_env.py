@@ -112,6 +112,12 @@ class ThorEnv:
             self.controller = Controller(**controller_kwargs)
         return self.controller
 
+    def _invalidate_controller(self) -> None:
+        self.controller = None
+        self.last_event = None
+        self.room_camera_event = None
+        self.room_camera_added = False
+
     def load_scene(self, scene: str, task: str | None = None) -> ObservationResponse:
         controller = self._ensure_controller()
         self.current_scene = scene
@@ -129,7 +135,19 @@ class ThorEnv:
 
     def perform_controller_action(self, payload: dict[str, Any]) -> ObservationResponse:
         controller = self.require_controller()
-        self.last_event = controller.step(**payload)
+        try:
+            self.last_event = controller.step(**payload)
+        except Exception as exc:
+            message = str(exc)
+            if "write to closed file" in message.lower():
+                self._invalidate_controller()
+                raise RuntimeError(
+                    "AI2-THOR controller connection was closed while executing the action. "
+                    "The simulator process likely exited or crashed. Reload the scene with /api/env/load and try again."
+                ) from exc
+            raise RuntimeError(
+                f"Failed to execute controller action {payload.get('action')}: {message}"
+            ) from exc
         return self.get_observation()
 
     def refresh_room_camera(self) -> None:
