@@ -15,3 +15,5 @@ tmp_*.py
 %SystemDrive%/
 backend/config/model_settings.local.json
 *.env
+Code/
+

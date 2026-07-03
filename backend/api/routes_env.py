@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException
 
-from backend.actions.action_space import SUPPORTED_ACTIONS
+from backend.actions.action_space import SUPPORTED_ACTIONS, get_manual_action_metadata
 from backend.envs.scene_registry import get_scene_payload
 from backend.envs.thor_env import thor_env
 from backend.memory.search_state import search_state
@@ -17,6 +17,11 @@ router = APIRouter(prefix="/api", tags=["environment"])
 @router.get("/scenes")
 def list_scenes() -> dict:
     return get_scene_payload()
+
+
+@router.get("/agent/action-space")
+def get_action_space() -> dict:
+    return {"actions": get_manual_action_metadata()}
 
 
 @router.post("/env/load", response_model=ObservationResponse)

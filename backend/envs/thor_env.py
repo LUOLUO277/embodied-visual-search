@@ -166,6 +166,8 @@ class ThorEnv:
 
     def get_observation(self, task: str | None = None) -> ObservationResponse:
         metadata = self.require_metadata()
+        # Refresh the third-person camera frame so room view stays in sync with each agent step.
+        self.refresh_room_camera()
         robot_view = ndarray_to_base64_png(self.last_event.frame)
         room_frame = self._get_room_frame()
         room_view = ndarray_to_base64_png(room_frame) if room_frame is not None else None
@@ -455,3 +457,4 @@ class ThorEnv:
 
 
 thor_env = ThorEnv()
+

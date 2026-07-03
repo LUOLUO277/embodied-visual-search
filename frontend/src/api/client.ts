@@ -67,15 +67,15 @@ export type Observation = {
 };
 
 export type AgentThought = {
-  situation_analysis: string;
-  spatial_reasoning: string;
-  task_planning: string;
-  self_reflection: string;
-  verification: string;
+  situation_analysis?: string;
+  spatial_reasoning?: string;
+  task_planning?: string;
+  self_reflection?: string;
+  verification?: string;
 };
 
 export type HighLevelAction = {
-  name:
+  name?:
     | "observe"
     | "move forward"
     | "move back"
@@ -91,10 +91,11 @@ export type HighLevelAction = {
     | "toggle"
     | "open"
     | "close"
-    | "end";
+    | "end"
+    | string;
   argument?: string | null;
   confidence?: number | null;
-  repetitions?: number;
+  repetitions?: number | null;
   raw_text?: string | null;
   raw_json?: Record<string, unknown> | null;
 };
@@ -130,8 +131,8 @@ export type TrajectoryItem = {
   step: number;
   scene: string;
   task: string;
-  thought: AgentThought;
-  action: HighLevelAction;
+  thought?: AgentThought;
+  action?: HighLevelAction;
   action_result: AgentActionResult;
   raw_model_output: string;
   visible_objects: VisibleObject[];
@@ -144,8 +145,8 @@ export type TrajectoryItem = {
 
 export type AgentStepResponse = {
   step: number;
-  thought: AgentThought;
-  action: HighLevelAction;
+  thought?: AgentThought;
+  action?: HighLevelAction;
   raw_model_output: string;
   action_result: AgentActionResult;
   robot_view: string | null;
@@ -193,6 +194,17 @@ export type ModelTestResponse = {
   raw_response?: string | null;
 };
 
+export type ManualActionMetadata = {
+  name: string;
+  display_name: string;
+  requires_target: boolean;
+  supports_repetitions: boolean;
+};
+
+export type ActionSpaceResponse = {
+  actions: ManualActionMetadata[];
+};
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -209,6 +221,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   getScenes: () => request<ScenePayload>("/api/scenes"),
+  getActionSpace: () => request<ActionSpaceResponse>("/api/agent/action-space"),
   loadScene: (scene: string, task: string) =>
     request<Observation>("/api/env/load", {
       method: "POST",
