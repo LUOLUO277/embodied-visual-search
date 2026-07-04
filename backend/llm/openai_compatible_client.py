@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from http.client import RemoteDisconnected
@@ -13,9 +13,19 @@ class OpenAICompatibleClient:
     def __init__(self, settings: ModelSettings) -> None:
         self.settings = settings
 
-    def chat(self, system_prompt: str, user_text: str, image_data_url: str | None = None) -> str:
+    def chat(
+        self,
+        system_prompt: str,
+        user_text: str,
+        image_data_url: str | None = None,
+        image_data_urls: list[str] | None = None,
+    ) -> str:
         if not self.settings.base_url or not self.settings.model or not self.settings.api_key:
             raise ValueError("Model settings are incomplete. Please configure base_url, api_key, and model.")
+
+        normalized_images = list(image_data_urls or [])
+        if image_data_url:
+            normalized_images.insert(0, image_data_url)
 
         payload = {
             "model": self.settings.model,
@@ -23,7 +33,7 @@ class OpenAICompatibleClient:
                 {"role": "system", "content": system_prompt},
                 {
                     "role": "user",
-                    "content": self._build_user_content(user_text=user_text, image_data_url=image_data_url),
+                    "content": self._build_user_content(user_text=user_text, image_data_urls=normalized_images),
                 },
             ],
             "temperature": self.settings.temperature,
@@ -78,14 +88,14 @@ class OpenAICompatibleClient:
         return self._extract_text(payload)
 
     def test_connection(self) -> str:
-        return self.chat(system_prompt="You are a concise assistant.", user_text="Return exactly: OK", image_data_url=None)
+        return self.chat(system_prompt="You are a concise assistant.", user_text="Return exactly: OK")
 
-    def _build_user_content(self, user_text: str, image_data_url: str | None = None) -> Any:
-        if self.settings.vision_enabled and image_data_url:
-            return [
-                {"type": "text", "text": user_text},
-                {"type": "image_url", "image_url": {"url": image_data_url}},
-            ]
+    def _build_user_content(self, user_text: str, image_data_urls: list[str] | None = None) -> Any:
+        if self.settings.vision_enabled and image_data_urls:
+            content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
+            for image_url in image_data_urls:
+                content.append({"type": "image_url", "image_url": {"url": image_url}})
+            return content
         return user_text
 
     @staticmethod

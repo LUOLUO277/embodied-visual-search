@@ -1,4 +1,4 @@
-﻿export type ScenePayload = {
+export type ScenePayload = {
   room_types: string[];
   scenes_by_room: Record<string, string[]>;
   all_scenes: string[];
@@ -28,6 +28,12 @@ export type RoomObjectInfo = {
   attributes: Record<string, string | number | boolean | null>;
 };
 
+export type RoomHitCandidate = {
+  object_id: string;
+  score: number;
+  reason: string;
+};
+
 export type RoomViewHit = {
   hit: boolean;
   pixel_x: number;
@@ -36,6 +42,21 @@ export type RoomViewHit = {
   normalized_y: number;
   object?: RoomObjectInfo | null;
   message: string;
+  hit_reason: string;
+  candidates: RoomHitCandidate[];
+};
+
+export type RoomObjectSelection = RoomViewHit & {
+  room_view?: string | null;
+  room_camera?: Observation["metadata"]["room_camera"] | null;
+  target_snapshot?: string | null;
+  target_snapshot_path?: string | null;
+};
+
+export type SelectedTarget = {
+  image: string;
+  objectType?: string | null;
+  note?: string | null;
 };
 
 export type Observation = {
@@ -84,12 +105,6 @@ export type MemoryUpdate = {
   ruled_out?: string | null;
   clue?: string | null;
   avoid?: string | null;
-  observed_area?: string | null;
-  searched_area?: string | null;
-  negative_finding?: string | null;
-  positive_clue?: string | null;
-  current_hypothesis?: string | null;
-  summary?: string | null;
 };
 
 export type SearchMemorySnapshot = {
@@ -191,6 +206,9 @@ export type AgentState = {
   scene: string;
   task_instruction: string;
   target_object?: string | null;
+  selected_target_image?: string | null;
+  selected_target_type?: string | null;
+  selected_target_note?: string | null;
   max_steps: number;
   current_step: number;
   last_error: string;
@@ -266,10 +284,21 @@ export const api = {
     }),
   getTrajectory: () => request<{ items: TrajectoryItem[] }>("/api/trajectory"),
   getAgentState: () => request<AgentState>("/api/agent/state"),
-  resetAgent: (taskInstruction: string, maxSteps: number) =>
+  resetAgent: (taskInstruction: string, maxSteps: number, selectedTarget?: SelectedTarget | null) =>
     request<AgentState>("/api/agent/reset", {
       method: "POST",
-      body: JSON.stringify({ task_instruction: taskInstruction, target_object: null, max_steps: maxSteps }),
+      body: JSON.stringify({
+        task_instruction: taskInstruction,
+        target_object: null,
+        max_steps: maxSteps,
+        target_reference_image: selectedTarget?.image ?? null,
+        target_reference_type: null,
+        target_reference_note:
+          selectedTarget?.note ??
+          (selectedTarget
+            ? "The user selected this object from the room view. Use it only as a target reference image."
+            : null),
+      }),
     }),
   stepAgent: (execute = true) =>
     request<AgentStepResponse>("/api/agent/step", {
@@ -297,14 +326,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify(settings ?? {}),
     }),
-  orbitRoomView: (deltaYaw: number, deltaPitch: number) =>
+  orbitRoomView: (deltaYaw: number, deltaPitch: number, deltaDistance = 0) =>
     request<Observation>("/api/camera/room/orbit", {
       method: "POST",
-      body: JSON.stringify({ delta_yaw: deltaYaw, delta_pitch: deltaPitch }),
+      body: JSON.stringify({ delta_yaw: deltaYaw, delta_pitch: deltaPitch, delta_distance: deltaDistance }),
     }),
   inspectRoomView: (x: number, y: number) =>
     request<RoomViewHit>("/api/camera/room/inspect", {
       method: "POST",
       body: JSON.stringify({ x, y }),
+    }),
+  selectRoomObject: (x: number, y: number) =>
+    request<RoomObjectSelection>("/api/camera/room/select-object", {
+      method: "POST",
+      body: JSON.stringify({ x, y, focus: true, make_snapshot: true }),
     }),
 };

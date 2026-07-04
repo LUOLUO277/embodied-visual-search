@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from collections import defaultdict
 from typing import Any
@@ -12,8 +12,8 @@ from backend.llm.output_parser import OutputParser, OutputParserError, build_par
 from backend.llm.prompt_builder import build_prompt
 from backend.memory.search_state import SearchState
 from backend.memory.trajectory import TrajectoryStore
-from backend.schemas.agent_schema import AgentActionResult, AgentStepResponse, AgentThought, MemoryUpdate, SearchMemorySnapshot
 from backend.schemas.action_schema import HighLevelAction
+from backend.schemas.agent_schema import AgentActionResult, AgentStepResponse, AgentThought, MemoryUpdate, SearchMemorySnapshot
 
 
 class LLMEmbodiedAgent(BaseAgent):
@@ -24,8 +24,23 @@ class LLMEmbodiedAgent(BaseAgent):
         self.search_state = search_state
         self.trajectory_store = trajectory_store
 
-    def reset(self, task_instruction: str, target_object: str | None = None, max_steps: int = 30) -> None:
-        self.search_state.reset_agent(task_instruction=task_instruction, target_object=target_object, max_steps=max_steps)
+    def reset(
+        self,
+        task_instruction: str,
+        target_object: str | None = None,
+        max_steps: int = 30,
+        target_reference_image: str | None = None,
+        target_reference_type: str | None = None,
+        target_reference_note: str | None = None,
+    ) -> None:
+        self.search_state.reset_agent(
+            task_instruction=task_instruction,
+            target_object=target_object,
+            max_steps=max_steps,
+            target_reference_image=target_reference_image,
+            target_reference_type=target_reference_type,
+            target_reference_note=target_reference_note,
+        )
         self.trajectory_store.reset()
         observation = self.env.get_observation(task=task_instruction)
         self._update_seen_objects(observation.metadata.visible_objects)
@@ -35,12 +50,19 @@ class LLMEmbodiedAgent(BaseAgent):
         observation = self.env.get_observation(task=self.search_state.task_instruction)
         self._update_seen_objects(observation.metadata.visible_objects)
         visible_objects, visible_ref_map = self._build_visible_affordances(observation)
+        target_reference = None
+        if self.search_state.selected_target_image:
+            target_reference = {
+                "type": self.search_state.selected_target_type,
+                "note": self.search_state.selected_target_note,
+            }
         observation_summary = {
             "current_visual_observation": "The current first-person robot image is attached.",
             "visible_interactable_objects": visible_objects,
             "holding_objects": self._sanitize_holding_objects(observation.metadata.inventory_objects),
             "last_action_feedback": self._build_last_action_feedback(observation),
             "memory": self._prompt_memory_payload(),
+            "target_reference": target_reference,
         }
         system_prompt, user_prompt = build_prompt(
             task_instruction=self.search_state.task_instruction,
@@ -49,15 +71,24 @@ class LLMEmbodiedAgent(BaseAgent):
             trajectory=self.trajectory_store.items,
             last_feedback=self.search_state.last_feedback,
             vision_enabled=settings.vision_enabled,
+            target_reference_type=self.search_state.selected_target_type,
+            target_reference_note=self.search_state.selected_target_note,
         )
         client = OpenAICompatibleClient(settings)
-        image_data_url = f"data:image/png;base64,{observation.robot_view}" if settings.vision_enabled and observation.robot_view else None
+        image_data_urls: list[str] = []
+        if settings.vision_enabled and observation.robot_view:
+            image_data_urls.append(f"data:image/png;base64,{observation.robot_view}")
+        if settings.vision_enabled and self.search_state.selected_target_image:
+            target_url = self.search_state.selected_target_image
+            if not target_url.startswith("data:"):
+                target_url = f"data:image/png;base64,{target_url}"
+            image_data_urls.append(target_url)
         try:
             parsed, raw_output = self._request_parsed_output(
                 client=client,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
-                image_data_url=image_data_url,
+                image_data_urls=image_data_urls,
             )
         except OutputParserError as exc:
             result = build_parse_error_result(str(exc))
@@ -110,13 +141,13 @@ class LLMEmbodiedAgent(BaseAgent):
         client: OpenAICompatibleClient,
         system_prompt: str,
         user_prompt: str,
-        image_data_url: str | None,
+        image_data_urls: list[str],
     ) -> tuple[Any, str]:
         retry_prompt = user_prompt
         last_error: OutputParserError | None = None
         last_raw_output = ""
         for attempt in range(1, self.MAX_PARSE_RETRIES + 1):
-            raw_output = client.chat(system_prompt=system_prompt, user_text=retry_prompt, image_data_url=image_data_url)
+            raw_output = client.chat(system_prompt=system_prompt, user_text=retry_prompt, image_data_urls=image_data_urls)
             last_raw_output = raw_output
             try:
                 return OutputParser.parse(raw_output), raw_output

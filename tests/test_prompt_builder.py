@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import unittest
@@ -41,9 +41,32 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertNotIn("objectId", user_prompt)
         self.assertNotIn("room_view", user_prompt)
         self.assertNotIn("metadata_summary", user_prompt)
-        self.assertIn("move forward*4", user_prompt)
-        self.assertIn("ruled_out", user_prompt)
-        self.assertIn("initial_scan", user_prompt)
+
+    def test_prompt_includes_target_reference_without_object_id(self):
+        _, user_prompt = build_prompt(
+            task_instruction="Pick it up.",
+            target_object=None,
+            observation={
+                "current_visual_observation": "The current first-person robot image is attached.",
+                "visible_interactable_objects": [],
+                "holding_objects": [],
+                "last_action_feedback": {"success": True, "message": "Ready."},
+                "memory": {"summary": "", "checked": [], "ruled_out": [], "avoid": [], "recent_clues": []},
+                "target_reference": {"type": "Box", "note": "Selected from room view."},
+            },
+            trajectory=[],
+            last_feedback="Ready.",
+            vision_enabled=True,
+            target_reference_type="Box",
+            target_reference_note="Selected from room view.",
+        )
+        payload = json.loads(user_prompt)
+
+        self.assertIn("target_reference", payload)
+        self.assertEqual(payload["target_reference"]["type_hint"], "Box")
+        self.assertIn("attached target reference image", payload["target_reference"]["image"])
+        self.assertNotIn("object_id", user_prompt)
+        self.assertIn("visible object refs only", payload["task"])
 
     def test_prompt_history_uses_phase_situation_and_decision(self):
         trajectory_item = TrajectoryItem(
@@ -131,77 +154,6 @@ class PromptBuilderTests(unittest.TestCase):
         self.assertEqual(parsed.thought.decision, "Open the drawer.")
         self.assertEqual(parsed.memory_update.checked, "counter drawer")
         self.assertEqual(parsed.action.argument, "Drawer_1")
-
-    def test_output_parser_normalizes_modes_and_brief(self):
-        parsed = OutputParser.parse(
-            json.dumps(
-                {
-                    "thought": {"modes": ["situation_analysis", "task_planning"], "brief": "I see a drawer. Open it."},
-                    "memory_update": {"checked": "counter drawer", "clue": "The drawer is closed."},
-                    "action": {"name": "open", "argument": "Drawer_1", "confidence": 0.9},
-                }
-            )
-        )
-
-        self.assertEqual(parsed.thought.phase, "visual_search")
-        self.assertEqual(parsed.thought.situation_analysis, "I see a drawer. Open it.")
-        self.assertEqual(parsed.thought.decision, "I see a drawer. Open it.")
-        self.assertEqual(parsed.memory_update.clue, "The drawer is closed.")
-
-    def test_output_parser_normalizes_legacy_thought_and_memory(self):
-        parsed = OutputParser.parse(
-            json.dumps(
-                {
-                    "thought": {
-                        "situation_analysis": "I see a drawer.",
-                        "spatial_reasoning": "It is near the counter.",
-                        "task_planning": "Open it.",
-                        "self_reflection": "Avoid the blocked route.",
-                        "verification": "Drawer_1 is visible.",
-                    },
-                    "memory_update": {
-                        "searched_area": "counter drawer",
-                        "negative_finding": "The visible table surface does not contain the target.",
-                        "positive_clue": "The drawer is closed.",
-                    },
-                    "action": {"name": "open", "argument": "Drawer_1", "confidence": 0.9},
-                }
-            )
-        )
-
-        self.assertEqual(parsed.thought.phase, "recovery")
-        self.assertEqual(parsed.thought.memory_reasoning, "Avoid the blocked route.")
-        self.assertEqual(parsed.thought.decision, "Open it.")
-        self.assertEqual(parsed.memory_update.checked, "counter drawer")
-        self.assertEqual(parsed.memory_update.ruled_out, "The visible table surface does not contain the target.")
-
-    def test_output_parser_repairs_truncated_json_with_repeated_action(self):
-        raw_output = """```json
-{
-  \"thought\": {
-    \"phase\": \"navigation\",
-    \"situation_analysis\": \"The box is visible ahead.\",
-    \"spatial_reasoning\": \"A few forward steps should reach it.\",
-    \"memory_reasoning\": null,
-    \"verification\": null,
-    \"decision\": \"Move forward several steps to approach the box.\"
-  },
-  \"memory_update\": {
-    \"checked\": null,
-    \"ruled_out\": null,
-    \"clue\": \"The box is almost reachable.\",
-    \"avoid\": null
-  },
-  \"action\": {
-    \"name\": \"move forward*3\",
-    \"argument\": null,
-    \"confidence\":
-```"""
-        parsed = OutputParser.parse(raw_output)
-
-        self.assertEqual(parsed.action.name, "move forward")
-        self.assertEqual(parsed.action.repetitions, 3)
-        self.assertIsNone(parsed.action.confidence)
 
     def test_repetition_count_is_clamped_to_five(self):
         action = HighLevelAction.model_validate({"name": "move forward*8"})

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any
 
@@ -50,6 +50,12 @@ class RoomObjectInfo(BaseModel):
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
+class RoomHitCandidate(BaseModel):
+    object_id: str
+    score: float
+    reason: str
+
+
 class EnvMetadata(BaseModel):
     scene_name: str
     agent_pose: AgentPose
@@ -75,11 +81,37 @@ class RoomViewInspectResponse(BaseModel):
     normalized_y: float
     object: RoomObjectInfo | None = None
     message: str = ""
+    hit_reason: str = ""
+    candidates: list[RoomHitCandidate] = Field(default_factory=list)
 
 
 class RoomViewOrbitRequest(BaseModel):
     delta_yaw: float
     delta_pitch: float
+    delta_distance: float = 0.0
+
+
+class RoomObjectSelectRequest(BaseModel):
+    x: float = Field(..., ge=0.0, le=1.0)
+    y: float = Field(..., ge=0.0, le=1.0)
+    focus: bool = True
+    make_snapshot: bool = True
+
+
+class RoomObjectSelectResponse(BaseModel):
+    hit: bool
+    pixel_x: int
+    pixel_y: int
+    normalized_x: float
+    normalized_y: float
+    object: RoomObjectInfo | None = None
+    room_view: str | None = None
+    room_camera: RoomCameraPose | None = None
+    target_snapshot: str | None = None
+    target_snapshot_path: str | None = None
+    message: str = ""
+    hit_reason: str = ""
+    candidates: list[RoomHitCandidate] = Field(default_factory=list)
 
 
 class ObservationResponse(BaseModel):

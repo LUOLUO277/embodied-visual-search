@@ -5,6 +5,8 @@ from fastapi import APIRouter, HTTPException
 from backend.envs.thor_env import thor_env
 from backend.schemas.env_schema import (
     ObservationResponse,
+    RoomObjectSelectRequest,
+    RoomObjectSelectResponse,
     RoomViewInspectRequest,
     RoomViewInspectResponse,
     RoomViewOrbitRequest,
@@ -33,6 +35,7 @@ def orbit_room_camera(request: RoomViewOrbitRequest) -> ObservationResponse:
         return thor_env.orbit_room_camera(
             delta_yaw=request.delta_yaw,
             delta_pitch=request.delta_pitch,
+            delta_distance=request.delta_distance,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -42,5 +45,13 @@ def orbit_room_camera(request: RoomViewOrbitRequest) -> ObservationResponse:
 def inspect_room_view(request: RoomViewInspectRequest) -> RoomViewInspectResponse:
     try:
         return thor_env.inspect_room_view(x=request.x, y=request.y)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/room/select-object", response_model=RoomObjectSelectResponse)
+def select_room_object(request: RoomObjectSelectRequest) -> RoomObjectSelectResponse:
+    try:
+        return thor_env.select_room_object(x=request.x, y=request.y, focus=request.focus, make_snapshot=request.make_snapshot)
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

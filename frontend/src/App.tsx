@@ -5,8 +5,10 @@ import {
   type AgentStepResponse,
   type ManualActionMetadata,
   type Observation,
+  type RoomObjectSelection,
   type RoomViewHit,
   type ScenePayload,
+  type SelectedTarget,
   type TrajectoryItem,
 } from "./api/client";
 import { AgentPanel } from "./components/AgentPanel";
@@ -26,19 +28,29 @@ const EMPTY_ROOM_HIT: RoomViewHit = {
   normalized_y: 0,
   object: null,
   message: "",
+  hit_reason: "",
+  candidates: [],
 };
+
+function buildTargetPromptPreview(taskInstruction: string, hasSelectedTarget: boolean): string | null {
+  if (!hasSelectedTarget) {
+    return null;
+  }
+  return `User instruction: ${taskInstruction}\nThe target object is shown in the attached target reference image. Find the matching object from the current first-person robot view and complete the instruction using visible object refs only.`;
+}
 
 function App() {
   const [scenes, setScenes] = useState<ScenePayload | null>(null);
   const [actionSpace, setActionSpace] = useState<ManualActionMetadata[]>([]);
   const [roomType, setRoomType] = useState("Kitchen");
   const [scene, setScene] = useState("");
-  const [taskInstruction, setTaskInstruction] = useState("寻找房间里纸箱子并拿起来");
+  const [taskInstruction, setTaskInstruction] = useState("寻找房间里的纸箱子并拿起来");
   const [maxSteps, setMaxSteps] = useState(20);
   const [observation, setObservation] = useState<Observation | null>(null);
   const [trajectory, setTrajectory] = useState<TrajectoryItem[]>([]);
   const [agentState, setAgentState] = useState<AgentState | null>(null);
   const [latestStep, setLatestStep] = useState<AgentStepResponse | null>(null);
+  const [selectedTarget, setSelectedTarget] = useState<SelectedTarget | null>(null);
   const [loading, setLoading] = useState(false);
   const [agentLoopRunning, setAgentLoopRunning] = useState(false);
   const [error, setError] = useState("");
@@ -58,6 +70,10 @@ function App() {
     }
     return trajectory[trajectory.length - 1] ?? agentState?.last_step ?? null;
   }, [agentState?.last_step, latestStep, trajectory]);
+  const targetPromptPreview = useMemo(
+    () => buildTargetPromptPreview(taskInstruction, Boolean(selectedTarget)),
+    [selectedTarget, taskInstruction],
+  );
 
   async function bootstrap() {
     try {
@@ -74,7 +90,15 @@ function App() {
       setScene(defaultScene);
       setTrajectory(trajectoryPayload.items);
       try {
-        setAgentState(await api.getAgentState());
+        const state = await api.getAgentState();
+        setAgentState(state);
+        if (state.selected_target_image) {
+          setSelectedTarget({
+            image: state.selected_target_image,
+            objectType: state.selected_target_type,
+            note: state.selected_target_note,
+          });
+        }
       } catch {
         setAgentState(null);
       }
@@ -95,6 +119,13 @@ function App() {
   async function refreshAgentState() {
     const nextState = await api.getAgentState();
     setAgentState(nextState);
+    if (nextState.selected_target_image) {
+      setSelectedTarget({
+        image: nextState.selected_target_image,
+        objectType: nextState.selected_target_type,
+        note: nextState.selected_target_note,
+      });
+    }
     return nextState;
   }
 
@@ -103,6 +134,7 @@ function App() {
       setLoading(true);
       const result = await api.loadScene(scene, taskInstruction);
       syncObservation(result);
+      setSelectedTarget(null);
       setLatestStep(null);
       await refreshTrajectory();
       await refreshAgentState();
@@ -131,7 +163,7 @@ function App() {
 
   async function handleAgentReset() {
     stopRequestedRef.current = false;
-    const result = await api.resetAgent(taskInstruction, maxSteps);
+    const result = await api.resetAgent(taskInstruction, maxSteps, selectedTarget);
     setAgentState(result);
     setLatestStep(null);
     await refreshTrajectory();
@@ -198,12 +230,12 @@ function App() {
     await handleAgentStart();
   }
 
-  async function handleRoomOrbit(deltaYaw: number, deltaPitch: number) {
+  async function handleRoomOrbit(deltaYaw: number, deltaPitch: number, deltaDistance = 0) {
     if (!observation) {
       return;
     }
     try {
-      const result = await api.orbitRoomView(deltaYaw, deltaPitch);
+      const result = await api.orbitRoomView(deltaYaw, deltaPitch, deltaDistance);
       syncObservation(result);
     } catch (err) {
       setError(String(err));
@@ -222,10 +254,49 @@ function App() {
     }
   }
 
+  async function handleRoomSelect(x: number, y: number): Promise<RoomObjectSelection> {
+    if (!observation?.room_view) {
+      return { ...EMPTY_ROOM_HIT, message: "Room view unavailable." };
+    }
+    try {
+      const result = await api.selectRoomObject(x, y);
+      if (result.room_view) {
+        setObservation((current) => {
+          if (!current) {
+            return current;
+          }
+          return {
+            ...current,
+            room_view: result.room_view ?? current.room_view,
+            metadata: {
+              ...current.metadata,
+              room_camera: result.room_camera ?? current.metadata.room_camera,
+            },
+          };
+        });
+      }
+      if (result.hit && result.target_snapshot) {
+        setSelectedTarget({
+          image: result.target_snapshot,
+          objectType: result.object?.object_type,
+          note: "The user selected this object from the room view. Use it only as a visual target reference.",
+        });
+      }
+      return result;
+    } catch (err) {
+      setError(String(err));
+      return { ...EMPTY_ROOM_HIT, message: "未选中物体。" };
+    }
+  }
+
   function handleRoomTypeChange(nextRoomType: string) {
     setRoomType(nextRoomType);
     const nextScene = scenes?.scenes_by_room[nextRoomType]?.[0] ?? "";
     setScene(nextScene);
+  }
+
+  function handleClearTarget() {
+    setSelectedTarget(null);
   }
 
   return (
@@ -257,6 +328,7 @@ function App() {
               disabled={!observation || sidebarDisabled}
               onInspect={handleRoomInspect}
               onOrbit={handleRoomOrbit}
+              onSelect={handleRoomSelect}
             />
           </section>
 
@@ -277,9 +349,12 @@ function App() {
               disabled={loading || !observation}
               running={isAgentRunning}
               currentStep={agentState?.current_step ?? 0}
+              selectedTarget={selectedTarget}
+              targetPromptPreview={targetPromptPreview}
               onTaskInstructionChange={setTaskInstruction}
               onMaxStepsChange={setMaxSteps}
               onToggleRun={handleToggleRun}
+              onClearTarget={handleClearTarget}
             />
             <ManualControl disabled={sidebarDisabled || !observation} observation={observation} actions={actionSpace} onAction={handleAction} />
             <LatestDecisionCard latestStep={latestDecision} agentState={agentState} onOpenTrajectory={() => setViewMode("trajectory")} />

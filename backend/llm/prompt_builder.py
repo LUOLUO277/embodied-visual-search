@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 
@@ -18,6 +18,8 @@ Use only:
 Rules:
 - Do not assume a global map, hidden objects, object ids, or simulator metadata.
 - For interaction actions, use only refs from visible_interactable_objects.
+- If a target reference image is attached, it is only a visual hint for what to look for, not a visible ref or simulator id.
+- The target reference image may come from a room view and may not be visible in the current first-person image yet.
 - If the target is visible and reachable, act on it.
 - If uncertain, gather more evidence by moving, rotating, looking, observing, navigating to a visible object, or opening relevant visible containers.
 - Avoid repeating failed actions or already checked places.
@@ -46,16 +48,7 @@ You must output a concise but useful reasoning summary, not a long chain-of-thou
 - If the previous action failed or repeated search is detected, use phase=recovery.
 - Before pickup or end, use phase=completion_check or include verification.
 
-Phase guide:
-- initial_scan: first 1-2 steps after reset or after entering a new search area.
-- visual_search: inspect the current view and decide whether to search, move, open, or rule out an area.
-- navigation: move, rotate, look, observe, or navigate to improve viewpoint.
-- interaction: open, close, pickup, toggle, or put in a visible ref.
-- recovery: handle failed action, blocked movement, contradiction, or repeated search.
-- completion_check: verify target match or task completion before pickup or end.
-
 Return exactly one JSON object. No markdown."""
-
 
 EXAMPLES = [
     {
@@ -74,58 +67,7 @@ EXAMPLES = [
             "avoid": None,
         },
         "action": {"name": "move forward*3", "argument": None, "confidence": 0.76},
-    },
-    {
-        "thought": {
-            "phase": "visual_search",
-            "situation_analysis": "The current shelf area is visible, and no object matching the target description is present in this view.",
-            "spatial_reasoning": "Rotating right can reveal a different area without revisiting the same checked shelf view.",
-            "memory_reasoning": "This shelf view should be ruled out unless the viewpoint changes or new evidence appears.",
-            "verification": None,
-            "decision": "Mark this view as ruled out and rotate to inspect a new area.",
-        },
-        "memory_update": {
-            "checked": "The current visible shelf area was inspected.",
-            "ruled_out": "The currently visible shelf area does not contain the target.",
-            "clue": None,
-            "avoid": "Do not return to the same shelf view unless the viewpoint changes.",
-        },
-        "action": {"name": "rotate right*3", "argument": None, "confidence": 0.74},
-    },
-    {
-        "thought": {
-            "phase": "recovery",
-            "situation_analysis": "The previous forward movement failed, so the current direction is likely blocked.",
-            "spatial_reasoning": "Rotating can reveal an alternate path without repeating the blocked movement.",
-            "memory_reasoning": "The failed forward action should be avoided from this pose.",
-            "verification": None,
-            "decision": "Rotate left several times to search for a new route.",
-        },
-        "memory_update": {
-            "checked": None,
-            "ruled_out": None,
-            "clue": None,
-            "avoid": "Do not repeat move forward from the current blocked pose.",
-        },
-        "action": {"name": "rotate left*3", "argument": None, "confidence": 0.73},
-    },
-    {
-        "thought": {
-            "phase": "completion_check",
-            "situation_analysis": "A visible pickupable object appears to match the target description.",
-            "spatial_reasoning": None,
-            "memory_reasoning": "No memory entry rules out this object.",
-            "verification": "The object is visible, reachable, pickupable, and matches the target description.",
-            "decision": "Pick up the matching object using its visible ref.",
-        },
-        "memory_update": {
-            "checked": None,
-            "ruled_out": None,
-            "clue": "A target-like object is visible and reachable.",
-            "avoid": None,
-        },
-        "action": {"name": "pickup", "argument": "Book_1", "confidence": 0.88},
-    },
+    }
 ]
 
 
@@ -136,6 +78,8 @@ def build_prompt(
     trajectory: list[TrajectoryItem],
     last_feedback: str,
     vision_enabled: bool,
+    target_reference_type: str | None = None,
+    target_reference_note: str | None = None,
 ) -> tuple[str, str]:
     history = []
     for item in trajectory[-4:]:
@@ -157,9 +101,16 @@ def build_prompt(
             }
         )
 
+    task_text = task_instruction
+    if observation.get("target_reference"):
+        task_text = (
+            f"User instruction: {task_instruction}\n"
+            "The target object is shown in the attached target reference image. "
+            "Find the matching object from the current first-person robot view and complete the instruction using visible object refs only."
+        )
+
     user_payload = {
-        "task": task_instruction,
-        "target_object": target_object,
+        "task": task_text,
         "actions": HIGH_LEVEL_ACTIONS,
         "movement_policy": {
             "repeatable_actions": [
@@ -219,6 +170,13 @@ def build_prompt(
             },
         },
     }
+    if observation.get("target_reference"):
+        user_payload["target_reference"] = {
+            "image": "attached target reference image",
+            "note": target_reference_note or "The user selected this object from the room view. Use it as the visual target reference. It may not be visible in the current first-person image.",
+        }
+    elif target_object:
+        user_payload["target_object"] = target_object
     if vision_enabled:
         user_payload["vision_enabled"] = True
     return SYSTEM_PROMPT, json.dumps(user_payload, ensure_ascii=False, indent=2)

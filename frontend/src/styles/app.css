@@ -657,3 +657,32 @@ p {
 .no-pad-stack {
   padding: 0;
 }
+
+.target-card {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #141b2a;
+  border: 1px solid rgba(126, 150, 220, 0.12);
+}
+
+.target-card-media img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 12px;
+  background: #05070e;
+}
+
+.target-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.target-card-body button {
+  align-self: flex-start;
+}

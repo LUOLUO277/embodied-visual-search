@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Literal
 
@@ -67,6 +67,9 @@ class AgentResetRequest(BaseModel):
     task_instruction: str
     target_object: str | None = None
     max_steps: int = Field(default=30, ge=1, le=200)
+    target_reference_image: str | None = None
+    target_reference_type: str | None = None
+    target_reference_note: str | None = None
 
 
 class AgentStepRequest(BaseModel):
@@ -135,6 +138,9 @@ class AgentStateResponse(BaseModel):
     scene: str = ""
     task_instruction: str = ""
     target_object: str | None = None
+    selected_target_image: str | None = None
+    selected_target_type: str | None = None
+    selected_target_note: str | None = None
     max_steps: int = 30
     current_step: int = 0
     last_error: str = ""

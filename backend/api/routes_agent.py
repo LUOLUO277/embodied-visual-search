@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
@@ -26,6 +26,9 @@ def reset_agent(request: AgentResetRequest) -> AgentStateResponse:
             task_instruction=request.task_instruction,
             target_object=request.target_object,
             max_steps=request.max_steps,
+            target_reference_image=request.target_reference_image,
+            target_reference_type=request.target_reference_type,
+            target_reference_note=request.target_reference_note,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -73,6 +76,9 @@ def get_agent_state() -> AgentStateResponse:
         scene=search_state.scene,
         task_instruction=search_state.task_instruction,
         target_object=search_state.target_object,
+        selected_target_image=search_state.selected_target_image,
+        selected_target_type=search_state.selected_target_type,
+        selected_target_note=search_state.selected_target_note,
         max_steps=search_state.max_steps,
         current_step=search_state.current_step,
         last_error=search_state.last_error,

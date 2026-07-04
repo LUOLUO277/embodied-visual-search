@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, field
 
@@ -20,6 +20,9 @@ class SearchState:
     task: str = ""
     task_instruction: str = ""
     target_object: str | None = None
+    selected_target_image: str | None = None
+    selected_target_type: str | None = None
+    selected_target_note: str | None = None
     max_steps: int = 30
     agent_active: bool = False
     agent_running: bool = False
@@ -38,6 +41,9 @@ class SearchState:
         self.task = task
         self.task_instruction = task
         self.target_object = None
+        self.selected_target_image = None
+        self.selected_target_type = None
+        self.selected_target_note = None
         self.max_steps = 30
         self.agent_active = False
         self.agent_running = False
@@ -51,10 +57,21 @@ class SearchState:
         self.seen_object_ids = set()
         self.semantic_memory = SemanticMemory()
 
-    def reset_agent(self, task_instruction: str, target_object: str | None = None, max_steps: int = 30) -> None:
+    def reset_agent(
+        self,
+        task_instruction: str,
+        target_object: str | None = None,
+        max_steps: int = 30,
+        target_reference_image: str | None = None,
+        target_reference_type: str | None = None,
+        target_reference_note: str | None = None,
+    ) -> None:
         self.task = task_instruction
         self.task_instruction = task_instruction
         self.target_object = target_object
+        self.selected_target_image = target_reference_image
+        self.selected_target_type = target_reference_type
+        self.selected_target_note = target_reference_note
         self.max_steps = max_steps
         self.agent_active = True
         self.agent_running = False
