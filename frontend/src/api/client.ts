@@ -1,4 +1,4 @@
-export type ScenePayload = {
+﻿export type ScenePayload = {
   room_types: string[];
   scenes_by_room: Record<string, string[]>;
   all_scenes: string[];
@@ -115,6 +115,14 @@ export type SearchMemorySnapshot = {
   recent_clues: string[];
 };
 
+export type ObserveView = {
+  label: "front" | "left" | "back" | "right" | string;
+  relative_rotation: string;
+  description?: string | null;
+  image_base64?: string | null;
+  image_path?: string | null;
+};
+
 export type HighLevelAction = {
   name?:
     | "observe"
@@ -162,6 +170,7 @@ export type AgentActionResult = {
   done: boolean;
   adapted_action?: Record<string, unknown> | null;
   image_paths: string[];
+  observe_views?: ObserveView[];
   frame_available: boolean;
   legal_navigations: string[];
   legal_interactions: LegalInteraction[];

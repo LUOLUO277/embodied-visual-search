@@ -1,0 +1,563 @@
+\documentclass[UTF8,a4paper,12pt]{ctexart}
+
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{makecell}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{caption}
+
+\geometry{left=2.6cm,right=2.6cm,top=2.6cm,bottom=2.6cm}
+
+\setlist[itemize]{leftmargin=2em}
+\setlist[enumerate]{leftmargin=2em,itemsep=0.25em,topsep=0.4em}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    urlcolor=blue,
+    citecolor=black
+}
+
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codegray}{RGB}{90,90,90}
+
+\lstdefinestyle{codestyle}{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    breakatwhitespace=false,
+    columns=fullflexible,
+    keepspaces=true,
+    showstringspaces=false,
+    frame=single,
+    rulecolor=\color{codegray},
+    tabsize=2
+}
+
+\lstset{style=codestyle}
+
+\title{\textbf{具身视觉搜索 Agent 设计文档}}
+\author{}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+
+
+\section{任务定义}
+
+本系统面向 AI2-THOR 室内场景中的具身视觉搜索任务。给定一个陌生室内环境和用户自然语言指令，Agent 基于第一人称视觉观察、可交互物体列表、历史动作反馈和搜索记忆，逐步完成目标物体的定位与必要交互。
+
+系统支持两类任务输入。第一类为纯文本指令，例如“找到桌上的杯子”；第二类为图文联合指令，即用户在房间视角中点选目标物体后，系统生成目标截图，并将其作为参考图像输入给 Agent。Agent 的输出为结构化决策结果，包括当前决策摘要、搜索记忆更新和下一步高层动作。
+
+该任务要求模型在受限动作空间内完成高层决策模拟器命令，而是通过多轮“观察—决策—执行—反馈”的交互完成搜索过程。
+
+\section{总体架构}
+
+本系统采用 LLM 驱动的多模态循环决策架构。核心流程如图 \ref{fig:agent-loop} 所示。
+
+\begin{center}
+\begin{minipage}{0.78\textwidth}
+\centering
+\begin{tabular}{c}
+环境观察 \\
+$\downarrow$ \\
+多模态 Prompt 构造 \\
+$\downarrow$ \\
+OpenAI-compatible 多模态模型调用 \\
+$\downarrow$ \\
+结构化输出解析 \\
+$\downarrow$ \\
+高层动作执行 \\
+$\downarrow$ \\
+反馈、记忆与轨迹更新 \\
+$\downarrow$ \\
+进入下一轮决策
+\end{tabular}
+\captionof{figure}{Agent 决策循环}
+\label{fig:agent-loop}
+\end{minipage}
+\end{center}
+
+系统主要由五类模块组成，如表 \ref{tab:modules} 所示。
+
+\begin{center}
+\begin{minipage}{0.95\textwidth}
+\captionof{table}{系统模块划分}
+\label{tab:modules}
+\begin{tabularx}{\textwidth}{p{3.1cm}X}
+\toprule
+模块 & 功能 \\
+\midrule
+环境与 API 层 & 封装 AI2-THOR 场景加载、机器人视角、房间视角、Agent reset / step / run / stop 等接口。 \\
+决策核心层 & 负责组织 observation、调用模型、解析动作、执行动作并更新状态。 \\
+Prompt 与模型层 & 将任务、视觉输入、可见物体、记忆和轨迹组织为多模态模型输入。 \\
+动作执行层 & 将高层动作映射到 AI2-THOR 可执行动作，并进行可见性与 affordance 检查。 \\
+记忆与轨迹层 & 维护搜索记忆、失败反馈、已见物体集合和完整交互轨迹。 \\
+\bottomrule
+\end{tabularx}
+\end{minipage}
+\end{center}
+
+其中，\texttt{LLMEmbodiedAgent.step()} 是单步决策的主入口，负责完成从观察获取、Prompt 构造、模型调用、输出解析到动作执行的完整链路。
+
+\section{决策流程}
+
+\subsection{初始化}
+
+任务开始时，系统调用 Agent reset。初始化阶段写入用户指令、最大步数和可选目标参考图像，清空上一轮搜索状态与轨迹记录，并从当前环境获取初始 observation。初始化完成后，Agent 进入可执行状态。
+
+\subsection{单步决策}
+
+每次 step 包含以下过程：
+
+\begin{enumerate}
+    \item 获取当前第一人称图像和环境元信息；
+    \item 整理当前可见且可交互的物体；
+    \item 读取上一轮动作反馈、搜索记忆和最近轨迹；
+    \item 构造多模态 Prompt；
+    \item 调用 OpenAI-compatible 多模态模型；
+    \item 解析模型输出的 JSON；
+    \item 执行高层动作；
+    \item 根据执行结果更新记忆、状态和轨迹。
+\end{enumerate}
+
+\subsection{连续运行}
+
+连续运行模式下，系统循环执行 step，直到出现以下条件之一：Agent 输出 \texttt{end}，达到最大步数，用户手动停止，模型输出无法解析，或动作执行出现严重异常。
+
+\section{观测表示}
+
+Agent 的输入由视觉信息和结构化状态共同构成。
+
+视觉信息包括当前第一人称机器人视角，以及可选的目标参考图像。若上一轮执行了 \texttt{observe}，系统会额外提供由同一位置采集的多方向观察图像。实际输入中，当前机器人图像承担 front 方向，上一轮 observe 生成的 left / back / right 图像作为补充视角输入，从而避免重复发送同一 front 图像。
+
+结构化状态包括表 \ref{tab:observation} 中的字段。
+
+\begin{center}
+\begin{minipage}{0.95\textwidth}
+\captionof{table}{结构化观测字段}
+\label{tab:observation}
+\begin{tabularx}{\textwidth}{p{4.2cm}X}
+\toprule
+字段 & 含义 \\
+\midrule
+\makecell[l]{\texttt{visible\_}\\\texttt{interactable\_}\\\texttt{objects}} & 当前可见且可交互的物体引用。 \\
+\texttt{holding\_objects} & 当前已持有物体。 \\
+\texttt{last\_action\_feedback} & 上一步动作执行结果。 \\
+\texttt{memory} & 搜索过程中的轻量语义记忆。 \\
+\texttt{recent\_steps} & 最近若干步轨迹摘要。 \\
+\texttt{target\_reference} & 可选目标参考图像说明。 \\
+\bottomrule
+\end{tabularx}
+\end{minipage}
+\end{center}
+
+可见物体不会直接暴露 AI2-THOR 内部 objectId，而是转换为 \texttt{Cup\_1}、\texttt{Drawer\_2} 等可读引用，并附带距离等级和可用 affordance。模型只能使用这些可见引用进行导航或交互，从而降低幻觉动作和非法对象操作的概率。
+
+\section{输出格式}
+
+模型输出采用固定 JSON 结构：
+
+\noindent\textbf{模型输出格式}
+\begin{lstlisting}
+{
+  "thought": {
+    "phase": "visual_search",
+    "situation_analysis": "...",
+    "spatial_reasoning": "...",
+    "memory_reasoning": "...",
+    "verification": "...",
+    "decision": "..."
+  },
+  "memory_update": {
+    "checked": "...",
+    "ruled_out": "...",
+    "clue": "...",
+    "avoid": "..."
+  },
+  "action": {
+    "name": "move forward*3",
+    "argument": null,
+    "confidence": 0.8
+  }
+}
+\end{lstlisting}
+
+其中，\texttt{thought} 记录简短、可调试的决策摘要，不要求模型输出完整推理链；\texttt{memory\_update} 用于更新搜索状态，包括已检查区域、已排除区域、新线索和应避免重复的行为；\texttt{action} 表示下一步高层动作，由执行层进一步映射到 AI2-THOR 动作。
+
+输出解析器会校验 \texttt{thought} 与 \texttt{action} 字段，并兼容部分轻微格式异常。例如，解析器能够从 Markdown 代码块或混合文本中提取第一个 JSON 对象，也能够对部分截断 JSON 进行修复；同时，解析器会对动作名称、重复次数和旧字段格式进行归一化。如果模型输出仍无法解析，系统会进入解析失败恢复流程。
+
+\section{高层动作空间}
+
+系统将动作空间划分为五类，如表 \ref{tab:actions} 所示。
+
+\begin{center}
+\begin{minipage}{0.95\textwidth}
+\captionof{table}{高层动作空间}
+\label{tab:actions}
+\begin{tabularx}{\textwidth}{p{3.2cm}X}
+\toprule
+类型 & 动作 \\
+\midrule
+移动与视角调整 & \texttt{move forward}、\texttt{move back}、\texttt{move left}、\texttt{move right}、\texttt{rotate left}、\texttt{rotate right}、\texttt{look up}、\texttt{look down}。 \\
+主动观察 & \texttt{observe}。 \\
+局部导航 & \texttt{navigate to}。 \\
+物体交互 & \texttt{open}、\texttt{close}、\texttt{pickup}、\texttt{put in}、\texttt{toggle}。 \\
+结束 & \texttt{end}。 \\
+\bottomrule
+\end{tabularx}
+\end{minipage}
+\end{center}
+
+移动和视角动作支持重复表达，例如 \texttt{move forward*3}、\texttt{move right*2}。Prompt 将重复动作主要限制为短连续调整：当方向明确、路径较清楚且只是短距离连续移动时，模型可以使用 \texttt{*2} 或 \texttt{*3}，以避免逐步重复输出同一动作；当路径不确定、靠近障碍物或上一轮同方向移动失败时，模型应避免使用多步重复动作。
+
+导航和交互动作必须使用当前可见物体引用作为参数。执行层会检查目标是否可见，以及是否具备对应 affordance。例如，\texttt{open} 只能作用于 openable 物体，\texttt{pickup} 只能作用于 pickupable 物体，\texttt{put in} 要求当前手中有物体且目标是 receptacle。
+
+\section{搜索记忆}
+
+具身视觉搜索具有长程性和局部观测限制。为减少重复搜索，系统维护轻量语义记忆：
+
+\noindent\textbf{语义记忆字段}
+\begin{lstlisting}
+summary
+checked
+ruled_out
+avoid
+recent_clues
+\end{lstlisting}
+
+其中，\texttt{checked} 记录已检查区域或物体，\texttt{ruled\_out} 记录可排除区域，\texttt{avoid} 记录失败动作或无效路线，\texttt{recent\_clues} 保存近期搜索线索。每一步结束后，系统根据模型输出的 \texttt{memory\_update} 和动作反馈更新记忆。如果动作失败，系统会自动加入避免重复该失败动作的提示。
+
+该设计以文本记忆方式为模型提供有限历史状态，在实现复杂度和搜索稳定性之间取得折中。
+
+\section{目标参考图像机制}
+
+系统支持用户通过房间视角点选目标物体。点选后，环境层基于第三方相机视角的实例分割、检测框和物体属性对候选对象排序，并生成目标物体截图。该截图在 Agent reset 时作为 target reference image 输入给模型。
+
+目标参考图像只作为视觉匹配提示，不作为可执行对象引用。模型仍需在第一人称视角中寻找与参考图像匹配的目标，并在目标进入当前可见物体列表后，使用对应 ref 执行导航或交互。
+
+\section{错误恢复机制}
+
+系统包含三类鲁棒性设计。
+
+第一，模型输出恢复。若模型输出不是合法 JSON，系统会将解析错误和上一次无效输出片段重新加入 Prompt，要求模型返回单个合法 JSON 对象。系统最多进行三次解析重试。
+
+第二，动作合法性检查。所有导航和交互动作都必须作用于当前可见 ref；若目标不可见、参数缺失或 affordance 不匹配，执行层返回 illegal action，并将错误反馈写入下一轮 observation。
+
+第三，重复动作失败反馈。对于 \texttt{move forward*3} 这类重复动作，执行层逐步执行底层动作。如果中途失败，系统会返回已完成步数、失败步数和错误原因，例如“执行了 1/3 步，第 2 步失败”。该反馈会进入下一轮 Prompt，帮助模型避免继续沿阻塞方向移动。
+
+\section{轨迹记录}
+
+每一步执行完成后，系统记录完整轨迹，包括任务、场景、模型输出、结构化 thought、动作、执行结果、记忆更新、可见物体、已见物体集合、持有物体、Agent 位姿、机器人视角图像和上一轮动作反馈。
+
+轨迹默认保存到：
+
+\noindent\textbf{轨迹保存路径}
+\begin{lstlisting}
+data/trajectories/latest_trajectory.json
+\end{lstlisting}
+
+
+
+\section{局限}
+
+当前系统已经能完成具身视觉搜索功能，但仍存在以下限制：
+
+\begin{enumerate}
+    \item 缺少显式空间地图，长程探索主要依赖文本记忆和最近轨迹；
+    \item 语义记忆未记录精确拓扑、坐标或物体分布；
+    \item 目标完成主要依赖模型自我验证，缺少独立 verifier；
+    \item \texttt{navigate to} 主要面向当前可见物体，无法直接处理不可见目标的长程路径规划；
+    \item 最终效果受多模态模型视觉识别和空间理解能力影响较大。
+\end{enumerate}
+
+
+
+\section{总结}
+
+本系统实现了一个面向 AI2-THOR 室内环境的具身视觉搜索 Agent。多模态语言模型作为高层决策核心，以第一人称图像、可见物体、动作反馈、搜索记忆和近期轨迹为输入，输出结构化思考摘要、记忆更新和高层动作，并通过多轮交互逐步完成目标搜索。
+
+
+
+\appendix
+
+\section{Prompt 设计}
+
+\subsection{Prompt 总体目标}
+
+Prompt 的设计目标是将多模态模型约束为具身决策器。其核心约束包括：
+
+\begin{enumerate}
+    \item 只能基于当前第一人称图像、可见物体 ref、搜索记忆、最近轨迹和动作反馈进行决策；
+    \item 不得假设全局地图、隐藏物体、模拟器内部 objectId 或未观察到的信息；
+    \item 导航和交互动作必须使用当前 \texttt{visible\_interactable\_objects} 中的 ref；
+    \item 若目标不确定，应通过观察、移动、转向、导航或打开相关容器收集证据；
+    \item 若目标可见且可达，应执行相应交互；
+    \item 在 \texttt{pickup} 或 \texttt{end} 前必须进行目标验证；
+    \item 每次只返回一个合法 JSON 对象，不输出 Markdown 或额外解释。
+\end{enumerate}
+
+\subsection{System Prompt 结构}
+
+实际系统中的 System Prompt 主要包含以下规则。
+
+\noindent\textbf{System Prompt 摘要}
+\begin{lstlisting}
+Role:
+You are an embodied visual-search agent in an AI2-THOR indoor room.
+
+Task:
+Complete the human instruction through observation-action interaction.
+
+Allowed evidence:
+- current first-person image
+- optional observe multi-view images
+- visible_interactable_objects refs
+- search memory
+- recent trajectory
+- last action feedback
+
+Core rules:
+- Do not assume global map, hidden objects, object ids, or simulator metadata.
+- Use only visible_interactable_objects refs for navigation and interaction.
+- Treat target reference image as a visual hint, not as an executable object ref.
+- If the target is visible and reachable, act on it.
+- If uncertain, gather more evidence.
+- Avoid repeated failed actions or already checked places.
+- End only after the task is completed or repeated evidence shows it cannot be completed.
+
+Movement:
+- Navigation actions support *N when repeated small steps are clearly needed:
+  move forward*2/*3, move back*2/*3, move left*2/*3, move right*2/*3.
+- Turn actions may also use *N when useful: turn left*2, turn right*2.
+- When direction is clear, the path is clear, and the goal is only a short continuous adjustment,
+  prefer a single repeated action instead of outputting the same move step-by-step.
+- If a move in that direction just failed, or the path is uncertain,
+  do not use multi-step movement in that direction.
+- After blocked feedback, do not repeat the same action blindly.
+
+Thought policy:
+Return a concise reasoning summary, not a long chain-of-thought.
+The phase must be one of:
+initial_scan, visual_search, navigation, interaction, recovery, completion_check.
+
+Output:
+Return exactly one JSON object. No markdown.
+\end{lstlisting}
+
+\subsection{User Prompt Payload}
+
+每一步的 User Prompt 使用 JSON payload 组织，主要字段如下。
+
+\noindent\textbf{User Prompt Payload 摘要}
+\begin{lstlisting}
+{
+  "task": "user instruction or target-reference instruction",
+  "actions": ["predefined high-level actions"],
+  "movement_policy": {
+    "repeatable_actions": [
+      "move forward",
+      "move back",
+      "move left",
+      "move right",
+      "rotate left",
+      "rotate right",
+      "look up",
+      "look down"
+    ],
+    "default": "Prefer *2 to *3 for clear repeated navigation or turn adjustments instead of repeating the same action line by line.",
+    "cautious": "Use a single step when a direction just failed, the path is uncertain, the robot is near obstacles, or re-observation is needed.",
+    "examples": [
+      "move forward*3",
+      "move back*2",
+      "move left*2",
+      "move right*3",
+      "turn left*2",
+      "turn right*2"
+    ]
+  },
+  "observation": {
+    "image": "attached first-person robot image",
+    "visible_interactable_objects": [],
+    "holding": [],
+    "last_feedback": {
+      "success": true,
+      "message": "..."
+    },
+    "observe_views": {
+      "note": "...",
+      "views": []
+    }
+  },
+  "memory": {
+    "summary": "...",
+    "checked": [],
+    "ruled_out": [],
+    "avoid": [],
+    "recent_clues": []
+  },
+  "search_policy": {
+    "initial_scan_observe": "...",
+    "visual_absence": "...",
+    "container_search": "...",
+    "anti_loop": "...",
+    "revisit_rule": "...",
+    "observe_views": "..."
+  },
+  "recent_steps": [],
+  "examples": [],
+  "output": {
+    "thought": {},
+    "memory_update": {},
+    "action": {}
+  }
+}
+\end{lstlisting}
+
+如果用户提供目标参考图像，payload 会增加：
+
+\noindent\textbf{目标参考图像字段}
+\begin{lstlisting}
+{
+  "target_reference": {
+    "image": "attached target reference image",
+    "type_hint": "...",
+    "note": "The user selected this object from the room view. Use it as the visual target reference. It may not be visible in the current first-person image."
+  }
+}
+\end{lstlisting}
+
+\subsection{输出 JSON 约束}
+
+模型必须返回如下结构。
+
+\noindent\textbf{输出 JSON 约束}
+\begin{lstlisting}
+{
+  "thought": {
+    "phase": "one of: initial_scan, visual_search, navigation, interaction, recovery, completion_check",
+    "situation_analysis": "required concise analysis of current visual and task evidence",
+    "spatial_reasoning": "movement or viewpoint reasoning, or null",
+    "memory_reasoning": "how memory affects this decision, or null",
+    "verification": "target or task verification before pickup or end, or null",
+    "decision": "required concise reason for the selected action"
+  },
+  "memory_update": {
+    "checked": "what was checked this step, or null",
+    "ruled_out": "place, object, view, or direction that likely does not contain the target, or null",
+    "clue": "useful clue found this step; mention left/right/front/back when observe views provide directional evidence, or null",
+    "avoid": "what to avoid repeating next, or null"
+  },
+  "action": {
+    "name": "one action from actions; when direction and path are clear, prefer repeated navigation actions such as move forward*3, move right*3, move left*2, move back*2, or turn left*2 instead of repeating one-step moves; avoid multi-step repeats after a failed move or when uncertain",
+    "argument": "visible object ref when required, else null",
+    "confidence": "number in [0, 1] or null"
+  }
+}
+\end{lstlisting}
+
+\subsection{动作空间约束}
+
+Prompt 中的动作约束可概括为：
+
+\noindent\textbf{Prompt 中的动作空间}
+\begin{lstlisting}
+Movement:
+- move forward
+- move back
+- move left
+- move right
+- rotate left
+- rotate right
+- look up
+- look down
+
+Observation:
+- observe
+
+Navigation:
+- navigate to <visible_ref>
+
+Interaction:
+- open <visible_ref>
+- close <visible_ref>
+- pickup <visible_ref>
+- put in <visible_ref>
+- toggle <visible_ref>
+
+Termination:
+- end
+\end{lstlisting}
+
+其中，移动与视角动作允许 \texttt{action*N} 表达。新版 Prompt 更强调短重复动作，即优先使用 \texttt{*2} 到 \texttt{*3}，而不是过长的连续移动。若上一轮同方向移动失败、路径不确定或需要重新观察，则应退回单步动作。
+
+\subsection{observe 多视角说明}
+
+\texttt{observe} 用于在当前位置获取方向性视觉证据。执行后，系统依次记录 front、left、back、right 四个方向的图像，并在结束时回到原始朝向。
+
+进入下一轮 Prompt 时，当前第一人称图像作为 front 方向单独发送；上一轮 observe 的 left / back / right 图像作为补充视角输入。Prompt 要求模型根据这些视角判断下一步应转向、前进还是排除某个方向。
+
+\noindent\textbf{observe 多视角说明}
+\begin{lstlisting}
+The attached environment images are ordered as:
+current robot view/front, observe-left, observe-back, observe-right.
+
+The current robot view is the front direction after observe returned to the original heading.
+The observe-left, observe-back, and observe-right images were captured from the same position
+after rotating left 90, 180, and 270 degrees.
+
+Use these images to decide which direction to rotate or move next.
+Objects seen only in observe-left, observe-back, or observe-right are directional visual clues;
+rotate toward that direction before interacting with them using visible refs.
+
+If a target-like object appears in one of these views, record that direction in memory_update.clue,
+for example "target-like object appears in left view".
+\end{lstlisting}
+
+\subsection{解析失败恢复 Prompt}
+
+当模型输出无法解析时，系统追加恢复提示，核心内容如下。
+
+\noindent\textbf{解析失败恢复 Prompt}
+\begin{lstlisting}
+Previous output could not be parsed.
+Return exactly one valid JSON object:
+{
+  "thought": {
+    "phase": "visual_search",
+    "situation_analysis": "...",
+    "spatial_reasoning": null,
+    "memory_reasoning": null,
+    "verification": null,
+    "decision": "..."
+  },
+  "memory_update": {
+    "checked": null,
+    "ruled_out": null,
+    "clue": null,
+    "avoid": null
+  },
+  "action": {
+    "name": "observe",
+    "argument": null,
+    "confidence": 0.0
+  }
+}
+Do not output markdown fences, explanations, or partial JSON.
+If a field value is unknown, use null.
+\end{lstlisting}
+
+该机制使模型输出错误不会立即导致任务终止，而是优先尝试将模型拉回可执行格式。
+
+
+
+\end{document}

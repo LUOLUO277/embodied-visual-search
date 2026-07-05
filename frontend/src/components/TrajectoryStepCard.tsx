@@ -1,4 +1,4 @@
-﻿import type { TrajectoryItem } from "../api/client";
+﻿import type { ObserveView, TrajectoryItem } from "../api/client";
 import {
   getActionArgumentLabel,
   getActionLabel,
@@ -41,6 +41,52 @@ function renderMemoryList(label: string, values: string[]) {
   );
 }
 
+function getObserveViewImageSource(view: ObserveView): string | null {
+  const image = view.image_base64?.trim();
+  if (!image) {
+    return null;
+  }
+  if (image.startsWith("data:")) {
+    return image;
+  }
+  return `data:image/png;base64,${image}`;
+}
+
+function renderObserveViews(observeViews: ObserveView[] | undefined) {
+  if (!observeViews || observeViews.length === 0) {
+    return null;
+  }
+
+  return (
+    <details className="detail-accordion" open>
+      <summary>Observe Views</summary>
+      <div className="observe-views-grid">
+        {observeViews.map((view) => {
+          const imageSource = getObserveViewImageSource(view);
+          return (
+            <article key={`${view.label}-${view.relative_rotation}`} className="observe-view-card">
+              {imageSource ? (
+                <img className="observe-view-image" src={imageSource} alt={`Observe ${view.label} view`} />
+              ) : (
+                <div className="observe-view-fallback">
+                  <span>No inline image</span>
+                  {view.image_path ? <code>{view.image_path}</code> : null}
+                </div>
+              )}
+              <div className="observe-view-meta">
+                <strong>{view.label}</strong>
+                <span>{view.relative_rotation}</span>
+                <p>{view.description || "No description."}</p>
+                {!imageSource && view.image_path ? <code>{view.image_path}</code> : null}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
 export function TrajectoryStepCard({ item }: Props) {
   const status = getStepStatus(item);
   const memory = getMemoryUpdate(item);
@@ -49,6 +95,7 @@ export function TrajectoryStepCard({ item }: Props) {
   const confidence = getConfidenceLabel(item.action);
   const phase = getThoughtPhase(item.thought);
   const thoughtSections = getThoughtSections(item.thought).filter((section) => section.value);
+  const observeViews = item.action_result.observe_views;
 
   return (
     <article className="timeline-card">
@@ -91,6 +138,8 @@ export function TrajectoryStepCard({ item }: Props) {
           </div>
         </div>
       </div>
+
+      {renderObserveViews(observeViews)}
 
       {thoughtSections.length > 0 ? (
         <details className="detail-accordion" open>

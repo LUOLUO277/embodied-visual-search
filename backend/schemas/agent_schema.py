@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any, Literal
 
@@ -63,6 +63,14 @@ class SearchMemorySnapshot(BaseModel):
     recent_clues: list[str] = Field(default_factory=list)
 
 
+class ObserveView(BaseModel):
+    label: Literal["front", "left", "back", "right"]
+    relative_rotation: str
+    description: str = ""
+    image_base64: str | None = None
+    image_path: str | None = None
+
+
 class AgentResetRequest(BaseModel):
     task_instruction: str
     target_object: str | None = None
@@ -94,6 +102,7 @@ class AgentActionResult(BaseModel):
     done: bool = False
     adapted_action: dict[str, Any] | None = None
     image_paths: list[str] = Field(default_factory=list)
+    observe_views: list[ObserveView] = Field(default_factory=list)
     frame_available: bool = False
     legal_navigations: list[str] = Field(default_factory=list)
     legal_interactions: list[dict[str, Any]] = Field(default_factory=list)

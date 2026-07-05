@@ -13,7 +13,7 @@ from backend.llm.prompt_builder import build_prompt
 from backend.memory.search_state import SearchState
 from backend.memory.trajectory import TrajectoryStore
 from backend.schemas.action_schema import HighLevelAction
-from backend.schemas.agent_schema import AgentActionResult, AgentStepResponse, AgentThought, MemoryUpdate, SearchMemorySnapshot
+from backend.schemas.agent_schema import AgentActionResult, AgentStepResponse, AgentThought, MemoryUpdate, ObserveView, SearchMemorySnapshot
 
 
 class LLMEmbodiedAgent(BaseAgent):
@@ -50,12 +50,16 @@ class LLMEmbodiedAgent(BaseAgent):
         observation = self.env.get_observation(task=self.search_state.task_instruction)
         self._update_seen_objects(observation.metadata.visible_objects)
         visible_objects, visible_ref_map = self._build_visible_affordances(observation)
+        pending_observe_views = list(self.search_state.last_observe_views)
+        prompt_observe_views = [view for view in pending_observe_views if view.label != "front"]
+
         target_reference = None
         if self.search_state.selected_target_image:
             target_reference = {
                 "type": self.search_state.selected_target_type,
                 "note": self.search_state.selected_target_note,
             }
+
         observation_summary = {
             "current_visual_observation": "The current first-person robot image is attached.",
             "visible_interactable_objects": visible_objects,
@@ -64,6 +68,9 @@ class LLMEmbodiedAgent(BaseAgent):
             "memory": self._prompt_memory_payload(),
             "target_reference": target_reference,
         }
+        if prompt_observe_views:
+            observation_summary["observe_views"] = self._prompt_observe_views_payload(prompt_observe_views)
+
         system_prompt, user_prompt = build_prompt(
             task_instruction=self.search_state.task_instruction,
             target_object=self.search_state.target_object,
@@ -74,15 +81,22 @@ class LLMEmbodiedAgent(BaseAgent):
             target_reference_type=self.search_state.selected_target_type,
             target_reference_note=self.search_state.selected_target_note,
         )
-        client = OpenAICompatibleClient(settings)
+
         image_data_urls: list[str] = []
         if settings.vision_enabled and observation.robot_view:
             image_data_urls.append(f"data:image/png;base64,{observation.robot_view}")
+        if settings.vision_enabled and prompt_observe_views:
+            for view in prompt_observe_views:
+                if view.image_base64:
+                    image_data_urls.append(f"data:image/png;base64,{view.image_base64}")
         if settings.vision_enabled and self.search_state.selected_target_image:
             target_url = self.search_state.selected_target_image
             if not target_url.startswith("data:"):
                 target_url = f"data:image/png;base64,{target_url}"
             image_data_urls.append(target_url)
+
+        client = OpenAICompatibleClient(settings)
+        consumed_observe_views = bool(pending_observe_views)
         try:
             parsed, raw_output = self._request_parsed_output(
                 client=client,
@@ -106,6 +120,7 @@ class LLMEmbodiedAgent(BaseAgent):
                 action_result=result,
                 observation=observation,
                 memory_update=MemoryUpdate(),
+                consumed_observe_views=consumed_observe_views,
             )
 
         if not execute:
@@ -117,12 +132,12 @@ class LLMEmbodiedAgent(BaseAgent):
                 message="Execution skipped.",
                 executed=False,
             )
-            return self._finalize_step(parsed.thought, parsed.action, raw_output, result, observation, parsed.memory_update)
+            return self._finalize_step(parsed.thought, parsed.action, raw_output, result, observation, parsed.memory_update, consumed_observe_views)
 
         try:
             result = execute_high_level_action(parsed.action, self.env, visible_ref_map=visible_ref_map)
             next_observation = self.env.get_observation(task=self.search_state.task_instruction)
-            return self._finalize_step(parsed.thought, parsed.action, raw_output, result, next_observation, parsed.memory_update)
+            return self._finalize_step(parsed.thought, parsed.action, raw_output, result, next_observation, parsed.memory_update, consumed_observe_views)
         except Exception as exc:
             result = AgentActionResult(
                 success=False,
@@ -134,7 +149,7 @@ class LLMEmbodiedAgent(BaseAgent):
                 error=str(exc),
                 executed=False,
             )
-            return self._finalize_step(parsed.thought, parsed.action, raw_output, result, observation, parsed.memory_update)
+            return self._finalize_step(parsed.thought, parsed.action, raw_output, result, observation, parsed.memory_update, consumed_observe_views)
 
     def _request_parsed_output(
         self,
@@ -185,11 +200,16 @@ class LLMEmbodiedAgent(BaseAgent):
         action_result: AgentActionResult,
         observation,
         memory_update: MemoryUpdate,
+        consumed_observe_views: bool = False,
     ) -> AgentStepResponse:
         self.search_state.current_step += 1
         self.search_state.agent_done = action_result.done
         self.search_state.last_error = action_result.error or action_result.message if not action_result.success else ""
         self.search_state.last_feedback = action_result.message
+        if consumed_observe_views:
+            self.search_state.last_observe_views = []
+        if action.name == "observe":
+            self.search_state.last_observe_views = list(action_result.observe_views) if action_result.success else []
         if action.argument and action.name == "navigate to" and action_result.success:
             self.search_state.visited_targets.append(action.argument)
             self.search_state.visited_targets = self.search_state.visited_targets[-20:]
@@ -290,6 +310,27 @@ class LLMEmbodiedAgent(BaseAgent):
             "ruled_out": list(semantic_memory.ruled_out[-8:]),
             "avoid": list(semantic_memory.avoid[-8:]),
             "recent_clues": list(semantic_memory.recent_clues[-5:]),
+        }
+
+    def _prompt_observe_views_payload(self, observe_views: list[ObserveView]) -> dict[str, Any]:
+        return {
+            "note": (
+                "The previous action was observe. The attached environment images are ordered as: current robot view/front, "
+                "observe-left, observe-back, observe-right. The current robot view is the front direction after observe "
+                "returned to the original heading. The observe-left, observe-back, and observe-right images were captured "
+                "from the same position after rotating left 90, 180, and 270 degrees. Use these images to decide which "
+                "direction to rotate or move next. Objects seen only in observe-left, observe-back, or observe-right are "
+                "directional visual clues; rotate toward that direction before interacting with them using visible refs. "
+                "If a target-like object appears in one of these views, record that direction in memory_update.clue, for example 'target-like object appears in left view'."
+            ),
+            "views": [
+                {
+                    "label": view.label,
+                    "relative_rotation": view.relative_rotation,
+                    "description": view.description,
+                }
+                for view in observe_views
+            ],
         }
 
     def _build_search_memory_snapshot(self) -> SearchMemorySnapshot:

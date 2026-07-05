@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
@@ -8,7 +8,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from backend.schemas.agent_schema import AgentActionResult, AgentThought, MemoryUpdate
-from backend.schemas.action_schema import HighLevelAction
+from backend.schemas.action_schema import ACTION_NAME_ALIASES, MAX_ACTION_REPETITIONS, REPEATED_ACTION_PATTERN, REPEATABLE_ACTIONS, HighLevelAction
 
 PHASES = {"initial_scan", "visual_search", "navigation", "interaction", "recovery", "completion_check"}
 
@@ -40,7 +40,7 @@ class OutputParser:
             raise UnsupportedModelOutputError("Model output must contain object fields: thought and action.")
         if not isinstance(memory_update_payload, dict):
             memory_update_payload = {}
-        action_payload = dict(action_payload)
+        action_payload = OutputParser._normalize_action_payload(action_payload)
         action_payload.setdefault("raw_json", payload)
         action_payload.setdefault("raw_text", raw_output)
         try:
@@ -52,6 +52,30 @@ class OutputParser:
         except ValueError as exc:
             raise OutputParserError(str(exc)) from exc
         return ParsedAgentOutput(thought=thought, action=action, raw_json=payload, memory_update=memory_update)
+
+    @staticmethod
+    def _normalize_action_payload(action_payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(action_payload)
+        name = normalized.get("name")
+        if isinstance(name, str):
+            stripped_name = name.strip()
+            repeated_match = REPEATED_ACTION_PATTERN.match(stripped_name)
+            if repeated_match:
+                stripped_name = repeated_match.group("name").strip()
+                count = int(repeated_match.group("count"))
+                normalized["repetitions"] = min(max(count, 1), MAX_ACTION_REPETITIONS)
+            alias_key = stripped_name.lower().replace("-", "_").replace(" ", "_")
+            canonical_name = ACTION_NAME_ALIASES.get(alias_key, stripped_name.lower())
+            normalized["name"] = canonical_name
+            if repeated_match and canonical_name not in REPEATABLE_ACTIONS:
+                raise OutputParserError(f"Action '{canonical_name}' does not support repetitions.")
+        repetitions = normalized.get("repetitions", 1)
+        try:
+            repetitions = int(repetitions)
+        except (TypeError, ValueError):
+            repetitions = 1
+        normalized["repetitions"] = min(max(repetitions, 1), MAX_ACTION_REPETITIONS)
+        return normalized
 
     @staticmethod
     def _normalize_thought_payload(thought_payload: dict[str, Any], action: HighLevelAction) -> dict[str, Any]:

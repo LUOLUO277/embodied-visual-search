@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from enum import Enum
 
@@ -56,7 +56,8 @@ def get_manual_action_metadata() -> list[dict[str, object]]:
             "name": action,
             "display_name": MANUAL_ACTION_DISPLAY_NAMES.get(action, action),
             "requires_target": False,
-            "supports_repetitions": False,
+            "supports_repetitions": action != ActionName.DONE.value,
         }
         for action in MANUAL_ACTIONS
     ]
+

@@ -1,8 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from backend.schemas.agent_schema import AgentStepResponse
+from backend.schemas.agent_schema import AgentStepResponse, ObserveView
 
 
 @dataclass
@@ -35,6 +35,7 @@ class SearchState:
     last_step: AgentStepResponse | None = None
     seen_object_ids: set[str] = field(default_factory=set)
     semantic_memory: SemanticMemory = field(default_factory=SemanticMemory)
+    last_observe_views: list[ObserveView] = field(default_factory=list)
 
     def reset_scene(self, scene: str, task: str = "") -> None:
         self.scene = scene
@@ -56,6 +57,7 @@ class SearchState:
         self.last_step = None
         self.seen_object_ids = set()
         self.semantic_memory = SemanticMemory()
+        self.last_observe_views = []
 
     def reset_agent(
         self,
@@ -84,6 +86,7 @@ class SearchState:
         self.last_step = None
         self.seen_object_ids = set()
         self.semantic_memory = SemanticMemory()
+        self.last_observe_views = []
 
 
 search_state = SearchState()

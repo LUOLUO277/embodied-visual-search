@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import copy
 import math
@@ -7,8 +7,9 @@ from typing import Any
 
 from backend.actions import base_action
 from backend.actions.object_resolver import ObjectResolver
+from backend.envs.frame_utils import ndarray_to_base64_png
 from backend.schemas.action_schema import HighLevelAction
-from backend.schemas.agent_schema import AgentActionResult
+from backend.schemas.agent_schema import AgentActionResult, ObserveView
 
 
 @dataclass
@@ -39,6 +40,13 @@ LOW_LEVEL_ACTION_ALIASES = {
     "LookUp": "look up",
     "LookDown": "look down",
 }
+
+OBSERVE_VIEW_SPECS = [
+    ("front", "0", "Front view from the original direction before rotating."),
+    ("left", "left 90", "Left view after rotating left 90 degrees from the front direction."),
+    ("back", "left 180", "Back view after rotating left 180 degrees from the front direction."),
+    ("right", "left 270", "Right view after rotating left 270 degrees from the front direction."),
+]
 
 
 def get_action_payload(action_name: str) -> dict[str, Any]:
@@ -86,21 +94,28 @@ def execute_high_level_action(
 def _execute_controller_step(action: HighLevelAction, env: Any, payload: dict[str, Any]) -> AgentActionResult:
     repetitions = max(1, int(action.repetitions or 1))
     last_payload = copy.deepcopy(payload)
-    for _ in range(repetitions):
+    completed_steps = 0
+    for step_index in range(1, repetitions + 1):
         env.perform_controller_action(copy.deepcopy(payload))
         metadata = env.require_metadata()
         if not bool(metadata.get("lastActionSuccess", True)):
+            error_message = str(metadata.get("errorMessage") or "Action failed.")
             return _result_from_event(
                 action=action,
                 env=env,
                 executed=True,
-                adapted_action={"sequence": payload.get("action"), "repetitions": repetitions},
+                adapted_action={**last_payload, "repetitions": repetitions, "completed_steps": completed_steps, "failed_step": step_index},
+                message=(
+                    f"Executed {action.name} {completed_steps}/{repetitions} steps; "
+                    f"failed at step {step_index}: {error_message}"
+                ),
             )
+        completed_steps += 1
     return _result_from_event(
         action=action,
         env=env,
         executed=True,
-        adapted_action={**last_payload, "repetitions": repetitions},
+        adapted_action={**last_payload, "repetitions": repetitions, "completed_steps": completed_steps},
         message=f"Executed {action.name} x{repetitions}." if repetitions > 1 else None,
     )
 
@@ -205,24 +220,72 @@ def _candidate_navigation_poses(env: Any, target_object: dict[str, Any]) -> list
 
 def _execute_observe(action: HighLevelAction, env: Any) -> AgentActionResult:
     controller = env.require_controller()
-    frames = []
-    sub_paths = []
-    for label in ["left", "back", "right"]:
-        event = base_action.rotate_left(controller, 90)
-        env.last_event = event
-        sub_paths.append(env.save_frame(event.frame, prefix=f"observe_{label}"))
-        frames.append(event.frame)
+    current_frame = getattr(env.last_event, "frame", None)
+    if current_frame is None:
+        message = "Current robot view is unavailable for observe."
+        return _build_result(
+            action=action,
+            env=env,
+            success=False,
+            message=message,
+            error=message,
+            error_type="action_error",
+            executed=False,
+        )
+
+    observe_views: list[ObserveView] = []
+    image_paths: list[str] = []
+    frames: list[Any] = []
+
+    def record_view(label: str, relative_rotation: str, description: str, frame: Any) -> None:
+        path = env.save_frame(frame, prefix=f"observe_{label}")
+        observe_views.append(
+            ObserveView(
+                label=label,
+                relative_rotation=relative_rotation,
+                description=description,
+                image_base64=ndarray_to_base64_png(frame),
+                image_path=path or None,
+            )
+        )
+        frames.append(frame)
+        if path:
+            image_paths.append(path)
+
+    for index, (label, relative_rotation, description) in enumerate(OBSERVE_VIEW_SPECS):
+        if index > 0:
+            event = base_action.rotate_left(controller, 90)
+            env.last_event = event
+        frame = getattr(env.last_event, "frame", None)
+        if frame is None:
+            message = f"Observe failed while capturing the {label} view."
+            return _build_result(
+                action=action,
+                env=env,
+                success=False,
+                message=message,
+                error=message,
+                error_type="action_error",
+                executed=False,
+                image_paths=image_paths,
+                observe_views=observe_views,
+            )
+        record_view(label, relative_rotation, description, frame)
+
     event = base_action.rotate_left(controller, 90)
     env.last_event = event
     env.refresh_room_camera()
+
     combined_path = env.save_combined_frames(frames, prefix="observe_combined") if frames else ""
+    ordered_paths = [path for path in [combined_path, *image_paths] if path]
     return _result_from_event(
         action=action,
         env=env,
         executed=True,
-        adapted_action={"action": "observe"},
-        message="Observation captured.",
-        image_paths=[path for path in [combined_path, *sub_paths] if path],
+        adapted_action={"action": "observe", "views": [view.model_dump(exclude={"image_base64", "image_path"}) for view in observe_views]},
+        message="Observation captured from front, left, back, and right views.",
+        image_paths=ordered_paths,
+        observe_views=observe_views,
     )
 
 
@@ -308,6 +371,7 @@ def _result_from_event(
     selected_object: dict[str, Any] | None = None,
     message: str | None = None,
     image_paths: list[str] | None = None,
+    observe_views: list[ObserveView] | None = None,
 ) -> AgentActionResult:
     metadata = env.require_metadata()
     success = bool(metadata.get("lastActionSuccess", True))
@@ -323,6 +387,7 @@ def _result_from_event(
         selected_object=selected_object,
         adapted_action=adapted_action,
         image_paths=image_paths or [],
+        observe_views=observe_views or [],
     )
 
 
@@ -338,6 +403,7 @@ def _build_result(
     selected_object: dict[str, Any] | None = None,
     adapted_action: dict[str, Any] | None = None,
     image_paths: list[str] | None = None,
+    observe_views: list[ObserveView] | None = None,
 ) -> AgentActionResult:
     metadata = env.require_metadata()
     resolver = ObjectResolver(metadata)
@@ -357,6 +423,7 @@ def _build_result(
         done=done,
         adapted_action=adapted_action,
         image_paths=image_paths or [],
+        observe_views=observe_views or [],
         frame_available=bool(getattr(env.last_event, "frame", None) is not None),
         legal_navigations=resolver.legal_navigations(),
         legal_interactions=resolver.legal_interactions(),
@@ -368,3 +435,4 @@ def look_at_rotation(agent_pos: dict[str, Any], object_pos: dict[str, Any]) -> f
     dx = float(object_pos.get("x", 0.0)) - float(agent_pos.get("x", 0.0))
     dz = float(object_pos.get("z", 0.0)) - float(agent_pos.get("z", 0.0))
     return (math.degrees(math.atan2(dx, dz)) + 360.0) % 360.0
+

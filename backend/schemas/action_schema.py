@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from typing import Any, Literal
@@ -24,6 +24,8 @@ HIGH_LEVEL_ACTION_NAMES = (
     "end",
 )
 
+MAX_ACTION_REPETITIONS = 3
+
 ACTION_NAME_ALIASES = {
     "navigate_to": "navigate to",
     "pickup_object": "pickup",
@@ -33,6 +35,8 @@ ACTION_NAME_ALIASES = {
     "move_back": "move back",
     "move_left": "move left",
     "move_right": "move right",
+    "turn_left": "rotate left",
+    "turn_right": "rotate right",
     "rotate_left": "rotate left",
     "rotate_right": "rotate right",
     "look_up": "look up",
@@ -80,7 +84,7 @@ class HighLevelAction(BaseModel):
     ]
     argument: str | None = None
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    repetitions: int = Field(default=1, ge=1, le=5)
+    repetitions: int = Field(default=1, ge=1, le=MAX_ACTION_REPETITIONS)
     raw_text: str | None = None
     raw_json: dict[str, Any] | None = None
 
@@ -99,7 +103,7 @@ class HighLevelAction(BaseModel):
                 raw_repetition_requested = True
                 stripped_name = repeated_match.group("name").strip()
                 count = int(repeated_match.group("count"))
-                normalized_data["repetitions"] = min(max(count, 1), 5)
+                normalized_data["repetitions"] = min(max(count, 1), MAX_ACTION_REPETITIONS)
             alias_key = stripped_name.lower().replace("-", "_").replace(" ", "_")
             normalized = ACTION_NAME_ALIASES.get(alias_key, stripped_name.lower())
             normalized_data["name"] = normalized
@@ -110,5 +114,5 @@ class HighLevelAction(BaseModel):
             repetitions = int(repetitions)
         except (TypeError, ValueError):
             repetitions = 1
-        normalized_data["repetitions"] = min(max(repetitions, 1), 5)
+        normalized_data["repetitions"] = min(max(repetitions, 1), MAX_ACTION_REPETITIONS)
         return normalized_data

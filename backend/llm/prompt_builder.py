@@ -7,46 +7,46 @@ from backend.schemas.agent_schema import TrajectoryItem
 
 SYSTEM_PROMPT = """You are an embodied visual-search agent in an AI2-THOR indoor room.
 
-Your job is to complete the human instruction through observation-action interaction.
+Complete the human instruction through observation-action interaction.
 
 Use only:
 - the current first-person image,
-- the visible interactable object refs,
-- the brief search memory,
-- the recent trajectory and last action feedback.
+- optional observe multi-view images,
+- visible_interactable_objects refs,
+- search memory,
+- recent trajectory and last action feedback.
 
-Rules:
+Core rules:
 - Do not assume a global map, hidden objects, object ids, or simulator metadata.
-- For interaction actions, use only refs from visible_interactable_objects.
-- If a target reference image is attached, it is only a visual hint for what to look for, not a visible ref or simulator id.
-- The target reference image may come from a room view and may not be visible in the current first-person image yet.
+- For navigation or interaction with objects, use only refs from visible_interactable_objects.
+- A target reference image is only a visual hint, not a visible ref or simulator id.
 - If the target is visible and reachable, act on it.
-- If uncertain, gather more evidence by moving, rotating, looking, observing, navigating to a visible object, or opening relevant visible containers.
+- If uncertain, gather more evidence by observing, moving, rotating, looking, navigating to visible objects, or opening relevant visible containers.
 - Avoid repeating failed actions or already checked places.
 - End only after the task is completed or repeated evidence shows it cannot be completed.
 
-Movement efficiency:
-- Movement and camera actions are repeatable: move forward, move back, move left, move right, rotate left, rotate right, look up, look down.
-- Use the compact form action*N, where N is an integer from 1 to 5, such as move forward*4 or rotate left*3.
-- When the path or view direction is clear and you expect the same micro-action to be needed several times, prefer 3-5 repetitions in one step.
-- Use 1-2 repetitions only when recently blocked, close to an interaction target, collision risk is high, uncertainty is high, or a small re-observation is needed.
-- Do not split obvious consecutive movement or camera actions into many single-step outputs.
-- After blocked feedback, do not repeat the same blocked action blindly; choose a smaller repeat, sidestep, rotate, observe, or another route.
+Movement:
+- Navigation actions support *N when repeated small steps are clearly needed: move forward*2/*3, move back*2/*3, move left*2/*3, move right*2/*3.
+- Turn actions may also use *N when useful: turn left*2, turn right*2.
+- When direction is clear, the path is clear, and the goal is only a short continuous adjustment, prefer a single repeated action instead of outputting the same move step-by-step.
+- If a move in that direction just failed, or the path is uncertain, do not use multi-step movement in that direction.
+- After blocked feedback, do not repeat the same action blindly.
+
+Initial scan:
+- At the beginning, if the target is not clearly visible and the current view is insufficient for a confident next action, prefer observe.
+- Do not use observe if the target is already clearly visible and reachable, or the next safe action is obvious.
 
 Thought policy:
-You must output a concise but useful reasoning summary, not a long chain-of-thought.
+Return a concise reasoning summary, not a long chain-of-thought.
 - phase: one of initial_scan, visual_search, navigation, interaction, recovery, completion_check.
-- situation_analysis: required every step. Explain what the current first-person image and visible interactable objects imply for the task.
-- spatial_reasoning: use when deciding where to move, rotate, look, observe, or navigate.
-- memory_reasoning: use when memory.checked, memory.ruled_out, memory.avoid, recent clues, or failed feedback affect the next decision.
-- verification: use before pickup or end, or when target identity is uncertain.
-- decision: required every step. Explain why the selected action is the next best action.
-- Use null for reasoning fields that are not needed. Do not write long paragraphs.
-- In initial_scan, situation_analysis must be especially careful: identify visible task-relevant evidence, whether the target is visible, and the first search direction.
-- Before moving toward a place, check memory.ruled_out and memory.avoid.
-- If the target is clearly absent from the current viewed area, mark it in memory_update.ruled_out.
-- If the previous action failed or repeated search is detected, use phase=recovery.
-- Before pickup or end, use phase=completion_check or include verification.
+- situation_analysis: summarize current visual and task evidence.
+- spatial_reasoning: explain movement or viewpoint choice; mention front, left, back, or right if observe views are useful.
+- memory_reasoning: explain how memory or failed feedback affects the decision, or null.
+- verification: use before pickup or end, or when target identity is uncertain, or null.
+- decision: explain why the selected action is best.
+- In initial_scan, say whether observe is needed; if skipped, explain why current evidence is enough.
+- If the target is absent from a checked view or place, update memory_update.ruled_out.
+- Before pickup or end, include verification or use phase=completion_check.
 
 Return exactly one JSON object. No markdown."""
 
@@ -54,11 +54,28 @@ EXAMPLES = [
     {
         "thought": {
             "phase": "initial_scan",
+            "situation_analysis": "The current first-person view is narrow, the target is not clearly visible, and there is not enough evidence to commit to a route yet.",
+            "spatial_reasoning": "A four-direction observe from the current position can reveal whether the useful path or target-like clue is in front, left, back, or right before moving.",
+            "memory_reasoning": "No area has been checked yet, so collecting directional evidence is more useful than a blind first move.",
+            "verification": None,
+            "decision": "Use observe first to collect four-direction views before choosing a route.",
+        },
+        "memory_update": {
+            "checked": None,
+            "ruled_out": None,
+            "clue": "Initial view is limited; collect four-direction views before committing to a route.",
+            "avoid": None,
+        },
+        "action": {"name": "observe", "argument": None, "confidence": 0.81},
+    },
+    {
+        "thought": {
+            "phase": "initial_scan",
             "situation_analysis": "The robot is facing a shelf or counter area. The target is not clearly visible yet, but the visible area may be relevant to the instruction.",
             "spatial_reasoning": "The open path ahead can reveal more of the shelf or counter area if the robot moves forward several steps.",
             "memory_reasoning": "No area has been checked yet, so there is no ruled-out region to avoid.",
             "verification": None,
-            "decision": "Move forward efficiently to inspect the likely search area.",
+            "decision": "Move forward efficiently to inspect the likely search area because the current view already suggests a promising route.",
         },
         "memory_update": {
             "checked": None,
@@ -69,6 +86,15 @@ EXAMPLES = [
         "action": {"name": "move forward*3", "argument": None, "confidence": 0.76},
     }
 ]
+
+OBSERVE_VIEWS_NOTE = (
+    "The attached environment images are ordered as: current robot view/front, observe-left, observe-back, observe-right. "
+    "The current robot view is the front direction after observe returned to the original heading. "
+    "The observe-left, observe-back, and observe-right images were captured from the same position after rotating left 90, 180, and 270 degrees. "
+    "Use these images to decide which direction to rotate or move next. "
+    "Objects seen only in observe-left, observe-back, or observe-right are directional visual clues; rotate toward that direction before interacting with them using visible refs. "
+    "If a target-like object appears in one of these views, record that direction in memory_update.clue, for example 'target-like object appears in left view'."
+)
 
 
 def build_prompt(
@@ -109,6 +135,19 @@ def build_prompt(
             "Find the matching object from the current first-person robot view and complete the instruction using visible object refs only."
         )
 
+    observation_payload = {
+        "image": observation.get("current_visual_observation", "attached first-person robot image"),
+        "visible_interactable_objects": observation.get("visible_interactable_objects", []),
+        "holding": observation.get("holding_objects", []),
+        "last_feedback": observation.get("last_action_feedback", {"success": None, "message": last_feedback}),
+    }
+    if observation.get("observe_views"):
+        observe_views = observation.get("observe_views") or {}
+        observation_payload["observe_views"] = {
+            "note": observe_views.get("note") or OBSERVE_VIEWS_NOTE,
+            "views": observe_views.get("views") or [],
+        }
+
     user_payload = {
         "task": task_text,
         "actions": HIGH_LEVEL_ACTIONS,
@@ -123,16 +162,11 @@ def build_prompt(
                 "look up",
                 "look down",
             ],
-            "default": "Prefer *3 to *5 for clear repeated movement or camera adjustment.",
-            "cautious": "Use *1 to *2 only when blocked, close to a target or object, uncertain, or needing re-observation.",
-            "examples": ["move forward*4", "move right*3", "rotate left*4", "look down*2"],
+            "default": "Prefer *2 to *3 for clear repeated navigation or turn adjustments instead of repeating the same action line by line.",
+            "cautious": "Use a single step when a direction just failed, the path is uncertain, the robot is near obstacles, or re-observation is needed.",
+            "examples": ["move forward*3", "move back*2", "move left*2", "move right*3", "turn left*2", "turn right*2"],
         },
-        "observation": {
-            "image": observation.get("current_visual_observation", "attached first-person robot image"),
-            "visible_interactable_objects": observation.get("visible_interactable_objects", []),
-            "holding": observation.get("holding_objects", []),
-            "last_feedback": observation.get("last_action_feedback", {"success": None, "message": last_feedback}),
-        },
+        "observation": observation_payload,
         "memory": {
             "summary": observation.get("memory", {}).get("summary", "Search has not started yet."),
             "checked": observation.get("memory", {}).get("checked", []),
@@ -141,10 +175,12 @@ def build_prompt(
             "recent_clues": observation.get("memory", {}).get("recent_clues", []),
         },
         "search_policy": {
+            "initial_scan_observe": "In the first step or early search phase, if the target is not clearly visible and the current view does not support a high-confidence move or interaction, prefer observe. Do not force observe when the target is already clearly visible and reachable or the next safe action is obvious.",
             "visual_absence": "If the target is clearly absent from the current viewed area, mark that area as ruled_out and avoid returning there.",
             "container_search": "After opening or inspecting a visible container and not finding the target, mark it as ruled_out.",
             "anti_loop": "Before moving or navigating, compare the destination with memory.ruled_out and memory.avoid.",
             "revisit_rule": "Only revisit a ruled-out area if the viewpoint changed, a container was opened, or new evidence suggests it is useful.",
+            "observe_views": "When observe multi-view images are attached, use them to infer which direction is promising, mention that direction in spatial_reasoning, and record directional clues in memory_update.clue or negative directions in memory_update.ruled_out.",
         },
         "recent_steps": history,
         "examples": EXAMPLES,
@@ -159,12 +195,12 @@ def build_prompt(
             },
             "memory_update": {
                 "checked": "what was checked this step, or null",
-                "ruled_out": "place, object, or view that likely does not contain the target, or null",
-                "clue": "useful clue found this step, or null",
+                "ruled_out": "place, object, view, or direction that likely does not contain the target, or null",
+                "clue": "useful clue found this step; mention left/right/front/back when observe views provide directional evidence, or null",
                 "avoid": "what to avoid repeating next, or null",
             },
             "action": {
-                "name": "one action from actions; repeatable movement or camera actions should usually use *3-*5 when clear, e.g. move forward*4; use *1-*2 only when cautious",
+                "name": "one action from actions; when direction and path are clear, prefer repeated navigation actions such as move forward*3, move right*3, move left*2, move back*2, or turn left*2 instead of repeating one-step moves; avoid multi-step repeats after a failed move or when uncertain",
                 "argument": "visible object ref when required, else null",
                 "confidence": "number in [0, 1] or null",
             },
@@ -173,6 +209,7 @@ def build_prompt(
     if observation.get("target_reference"):
         user_payload["target_reference"] = {
             "image": "attached target reference image",
+            "type_hint": target_reference_type,
             "note": target_reference_note or "The user selected this object from the room view. Use it as the visual target reference. It may not be visible in the current first-person image.",
         }
     elif target_object:
