@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 class ModelSettings(BaseModel):
     base_url: str = "https://ai.dianhuomao.shop/v1"
-    api_key: str | None = "sk-rH7GKOri7wFZMYEZcteiuzliyhZReZoeSFKgLtqI0uHP5yfq"
+    api_key: str | None = None
     model: str = "【J-C思考】gemini-2.5-pro（3）"
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     max_tokens: int = Field(default=1024, ge=1, le=8192)
@@ -28,4 +28,5 @@ class ModelTestResponse(BaseModel):
     success: bool
     message: str
     raw_response: str | None = None
+
 

@@ -14,7 +14,7 @@ class ModelSettingsStore:
     def load(self) -> ModelSettings:
         env_settings = ModelSettings(
             base_url=os.getenv("OPENAI_COMPAT_BASE_URL", "https://ai.dianhuomao.shop/v1"),
-            api_key=os.getenv("OPENAI_COMPAT_API_KEY", "sk-rH7GKOri7wFZMYEZcteiuzliyhZReZoeSFKgLtqI0uHP5yfq"),
+            api_key=os.getenv("OPENAI_COMPAT_API_KEY") or "",
             model=os.getenv("OPENAI_COMPAT_MODEL", "【J-C思考】gemini-2.5-pro（3）"),
             temperature=0.2,
             max_tokens=1024,
@@ -66,4 +66,5 @@ class ModelSettingsStore:
 
 
 model_settings_store = ModelSettingsStore()
+
 
